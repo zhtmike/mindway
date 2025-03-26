@@ -24,7 +24,7 @@ from tests.modeling_test_utils import (
     generalized_parse_args,
     get_modules,
 )
-from tests.transformers_tests.models.modeling_common import floats_numpy
+from tests.models.modeling_common import floats_numpy
 
 # fp16 got nan
 DTYPE_AND_THRESHOLDS = {"fp32": 5e-4, "bf16": 5e-3}

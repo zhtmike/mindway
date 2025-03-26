@@ -24,7 +24,7 @@ from tests.modeling_test_utils import (
     generalized_parse_args,
     get_modules,
 )
-from tests.transformers_tests.models.modeling_common import floats_numpy, ids_numpy
+from tests.models.modeling_common import floats_numpy, ids_numpy
 
 # PadV3 not support bf16
 DTYPE_AND_THRESHOLDS = {"fp32": 5e-3, "fp16": 5e-2}
