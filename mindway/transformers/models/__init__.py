@@ -9,7 +9,7 @@ from . import (
     gemma,
     gemma2,
     glm,
-    glpn
+    glpn,
     gpt2,
     llama,
     llava,

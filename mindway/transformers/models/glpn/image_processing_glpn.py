@@ -242,7 +242,6 @@ class GLPNImageProcessor(BaseImageProcessor):
             `List[Dict[str, TensorType]]`: A list of dictionaries of tensors representing the processed depth
             predictions.
         """
-        requires_backends(self, "torch")
 
         predicted_depth = outputs.predicted_depth
 
