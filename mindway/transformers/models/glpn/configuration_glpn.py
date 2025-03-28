@@ -14,15 +14,13 @@
 # limitations under the License.
 """GLPN model configuration"""
 
-# TODO: not available in mindway
-# from ...configuration_utils import PretrainedConfig
+from transformers.configuration_utils import PretrainedConfig
 from ...utils import logging
 
 
 logger = logging.get_logger(__name__)
 
-class GLPNConfig():
-# class GLPNConfig(PretrainedConfig):
+class GLPNConfig(PretrainedConfig):
     r"""
     This is the configuration class to store the configuration of a [`GLPNModel`]. It is used to instantiate an GLPN
     model according to the specified arguments, defining the model architecture. Instantiating a configuration with the
