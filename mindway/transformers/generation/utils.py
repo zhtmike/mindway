@@ -212,7 +212,7 @@ class GenerationMixin:
                 model_inputs["inputs_embeds"] = inputs_embeds
             else:
                 # `clone` calls in this function ensure a consistent stride. See #32227
-                model_inputs[input_ids_key] = input_ids.copy()
+                model_inputs[input_ids_key] = input_ids.clone()
                 model_inputs["inputs_embeds"] = None
         else:
             model_inputs[input_ids_key] = input_ids.clone()
@@ -237,7 +237,11 @@ class GenerationMixin:
         for model_input_name in ["position_ids", "token_type_ids", "decoder_position_ids"]:
             model_input = kwargs.get(model_input_name)
             if model_input is not None:
-                if past_key_values is not None:
+                _past_key_values = past_key_values
+                if isinstance(past_key_values, (tuple, list)) and get_seq_length(past_key_values) == 0:
+                    _past_key_values = None
+
+                if _past_key_values is not None:
                     current_input_length = (
                         model_inputs["inputs_embeds"].shape[1]
                         if model_inputs.get("inputs_embeds") is not None
@@ -251,7 +255,7 @@ class GenerationMixin:
                         model_input = model_input[:, cur_len-current_input_length: cur_len]
                     else:
                         model_input = model_input[:, -current_input_length:]
-                    model_input = model_input.copy()
+                    model_input = model_input.clone()
                 model_inputs[model_input_name] = model_input
 
         # 6. Create 4D attention mask is we are using a `StaticCache` (important for performant compiled forward pass)
