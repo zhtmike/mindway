@@ -3,7 +3,7 @@
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Mapping, Optional
 
-from ...configuration_utils import PretrainedConfig
+from transformers.configuration_utils import PretrainedConfig
 from ...utils import logging
 
 

@@ -16,14 +16,14 @@ from ...modeling_outputs import (
     CausalLMOutputWithCrossAttentions,
     SequenceClassifierOutputWithPast,
 )
-from ...modeling_utils import PreTrainedModel
+from ...modeling_utils import MSPreTrainedModel
 from ...mindspore_utils import Conv1D, find_pruneable_heads_and_indices, prune_conv1d_layer
 
 from ...utils import (
-    add_start_docstrings,
-    add_start_docstrings_to_model_forward,
+    # add_start_docstrings,
+    # add_start_docstrings_to_model_forward,
     logging,
-    replace_return_docstrings,
+    # replace_return_docstrings,
 )
 from .configuration_imagegpt import ImageGPTConfig
 
@@ -51,11 +51,11 @@ class ImageGPTLayerNorm(nn.Cell):
     def __init__(self, hidden_size: Tuple[int], eps: float = 1e-5):
         super().__init__()
         self.eps = eps
-        self.weight = mint.nn.Parameter(ms.Tensor(hidden_size))
+        self.weight = ms.Parameter(mint.zeros(hidden_size))
 
     def construct(self, tensor: ms.Tensor) -> ms.Tensor:
         # input is not mean centered
-        tensor = tensor / mint.sqrt(mint.mean(mint.square(tensor), axis=-1, keepdims=True) + self.eps)
+        tensor = tensor / mint.sqrt(mint.mean(mint.square(tensor), dim=-1, keepdim=True) + self.eps)
         tensor = tensor * self.weight
         return tensor
 
@@ -65,7 +65,7 @@ class ImageGPTAttention(nn.Cell):
         super().__init__()
 
         max_positions = config.max_position_embeddings
-        self.bias = mint.tril(mint.ones((max_positions, max_positions), dtype=mint.bool)).view(
+        self.bias = mint.tril(mint.ones((max_positions, max_positions), dtype=ms.bool_)).view(
             1, 1, max_positions, max_positions
         )
         self.masked_bias = ms.tensor(-1e4)
@@ -283,8 +283,8 @@ class ImageGPTMLP(nn.Cell):
     def __init__(self, intermediate_size, config):
         super().__init__()
         embed_dim = config.hidden_size
-        self.c_fc = Conv1D(embed_dim, intermediate_size)
-        self.c_proj = Conv1D(intermediate_size, embed_dim)
+        self.c_fc = Conv1D(intermediate_size, embed_dim)
+        self.c_proj = Conv1D(embed_dim, intermediate_size)
         self.act = ACT2FN[config.activation_function]
         self.dropout = mint.nn.Dropout(p=config.resid_pdrop)
 
@@ -371,7 +371,7 @@ class ImageGPTBlock(nn.Cell):
         return outputs  # hidden_states, present, (attentions)
 
 
-class ImageGPTPreTrainedModel(PreTrainedModel):
+class ImageGPTPreTrainedModel(MSPreTrainedModel):
     """
     An abstract class to handle weights initialization and a simple interface for downloading and loading pretrained
     models.
@@ -481,10 +481,10 @@ IMAGEGPT_INPUTS_DOCSTRING = r"""
             Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
 """
 
-@add_start_docstrings(
-    "The bare ImageGPT Model transformer outputting raw hidden-states without any specific head on top.",
-    IMAGEGPT_START_DOCSTRING,
-)
+# @add_start_docstrings(
+#     "The bare ImageGPT Model transformer outputting raw hidden-states without any specific head on top.",
+#     IMAGEGPT_START_DOCSTRING,
+# )
 class ImageGPTModel(ImageGPTPreTrainedModel):
     """
     The ImageGPT Model transformer outputting raw hidden-states without any specific head on top.
@@ -527,8 +527,8 @@ class ImageGPTModel(ImageGPTPreTrainedModel):
         for layer, heads in heads_to_prune.items():
             self.h[layer].attn.prune_heads(heads)
 
-    @add_start_docstrings_to_model_forward(IMAGEGPT_INPUTS_DOCSTRING)
-    @replace_return_docstrings(output_type=BaseModelOutputWithPastAndCrossAttentions, config_class=_CONFIG_FOR_DOC)
+    # @add_start_docstrings_to_model_forward(IMAGEGPT_INPUTS_DOCSTRING)
+    # @replace_return_docstrings(output_type=BaseModelOutputWithPastAndCrossAttentions, config_class=_CONFIG_FOR_DOC)
     def construct(
         self,
         input_ids: Optional[ms.Tensor] = None,
@@ -739,13 +739,13 @@ class ImageGPTModel(ImageGPTPreTrainedModel):
         )
 
 
-@add_start_docstrings(
-    """
-    The ImageGPT Model transformer with a language modeling head on top (linear layer with weights tied to the input
-    embeddings).
-    """,
-    IMAGEGPT_START_DOCSTRING,
-)
+# @add_start_docstrings(
+#     """
+#     The ImageGPT Model transformer with a language modeling head on top (linear layer with weights tied to the input
+#     embeddings).
+#     """,
+#     IMAGEGPT_START_DOCSTRING,
+# )
 class ImageGPTForCausalImageModeling(ImageGPTPreTrainedModel, GenerationMixin):
     """
     The ImageGPT Model transformer with a language modeling head on top (linear layer with weights tied to the input
@@ -756,7 +756,7 @@ class ImageGPTForCausalImageModeling(ImageGPTPreTrainedModel, GenerationMixin):
     def __init__(self, config: ImageGPTConfig):
         super().__init__(config)
         self.transformer = ImageGPTModel(config)
-        self.lm_head = mint.nn.Linear(config.hidden_size, config.vocab_size, has_bias=False)
+        self.lm_head = mint.nn.Linear(config.hidden_size, config.vocab_size - 1, bias=False)
         # self.lm_head.weight = self.transformer.wte.embedding_table
 
         # Initialize weights and apply final processing
@@ -768,8 +768,8 @@ class ImageGPTForCausalImageModeling(ImageGPTPreTrainedModel, GenerationMixin):
     def set_output_embeddings(self, new_embeddings):
         self.lm_head = new_embeddings
 
-    @add_start_docstrings_to_model_forward(IMAGEGPT_INPUTS_DOCSTRING)
-    @replace_return_docstrings(output_type=CausalLMOutputWithCrossAttentions, config_class=_CONFIG_FOR_DOC)
+    # @add_start_docstrings_to_model_forward(IMAGEGPT_INPUTS_DOCSTRING)
+    # @replace_return_docstrings(output_type=CausalLMOutputWithCrossAttentions, config_class=_CONFIG_FOR_DOC)
     def construct(
         self,
         input_ids: Optional[ms.Tensor] = None,
@@ -903,13 +903,13 @@ class ImageGPTForCausalImageModeling(ImageGPTPreTrainedModel, GenerationMixin):
         )
 
 
-@add_start_docstrings(
-    """
-    The ImageGPT Model transformer with an image classification head on top (linear layer).
-    [`ImageGPTForImageClassification`] average-pools the hidden states in order to do the classification.
-    """,
-    IMAGEGPT_START_DOCSTRING,
-)
+# @add_start_docstrings(
+#     """
+#     The ImageGPT Model transformer with an image classification head on top (linear layer).
+#     [`ImageGPTForImageClassification`] average-pools the hidden states in order to do the classification.
+#     """,
+#     IMAGEGPT_START_DOCSTRING,
+# )
 class ImageGPTForImageClassification(ImageGPTPreTrainedModel):
     """
     The ImageGPT Model transformer with an image classification head on top (linear layer).
@@ -920,13 +920,13 @@ class ImageGPTForImageClassification(ImageGPTPreTrainedModel):
         super().__init__(config)
         self.num_labels = config.num_labels
         self.transformer = ImageGPTModel(config)
-        self.score = mint.nn.Linear(config.hidden_size, self.num_labels, has_bias=False)
+        self.score = mint.nn.Linear(config.hidden_size, self.num_labels, bias=False)
 
         # Initialize weights and apply final processing
         self.post_init()
 
-    @add_start_docstrings_to_model_forward(IMAGEGPT_INPUTS_DOCSTRING)
-    @replace_return_docstrings(output_type=SequenceClassifierOutputWithPast, config_class=_CONFIG_FOR_DOC)
+    # @add_start_docstrings_to_model_forward(IMAGEGPT_INPUTS_DOCSTRING)
+    # @replace_return_docstrings(output_type=SequenceClassifierOutputWithPast, config_class=_CONFIG_FOR_DOC)
     def construct(
         self,
         input_ids: Optional[ms.Tensor] = None,

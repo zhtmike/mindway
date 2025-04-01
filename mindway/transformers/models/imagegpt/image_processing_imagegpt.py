@@ -185,53 +185,44 @@ class ImageGPTImageProcessor(BaseImageProcessor):
                 Whether to resize the image.
             size (`Dict[str, int]`, *optional*, defaults to `self.size`):
                 Size of the image after resizing.
-            resample (`PILImageResampling`, *optional*, defaults to `self.resample`):
-                Resampling filter to use if resizing the image. This can be one of the enum `PILImageResampling`. Only
+            resample (`int`, *optional*, defaults to `self.resample`):
+                Resampling filter to use if resizing the image. This can be one of the enum `PILImageResampling`, Only
                 has an effect if `do_resize` is set to `True`.
             do_normalize (`bool`, *optional*, defaults to `self.do_normalize`):
                 Whether to normalize the image
             do_color_quantize (`bool`, *optional*, defaults to `self.do_color_quantize`):
                 Whether to color quantize the image.
             clusters (`np.ndarray` or `List[List[int]]`, *optional*, defaults to `self.clusters`):
-                Clusters to use for color quantization.
+                Clusters used to quantize the image of shape `(n_clusters, 3)`. Only has an effect if
+                `do_color_quantize` is set to `True`.
             return_tensors (`str` or `TensorType`, *optional*):
                 The type of tensors to return. Can be one of:
-                - Unset: Return a list of `np.ndarray`.
-                - `TensorType.MINDSPORE` or `'ms'`: Return a batch of tensors.
-                - `TensorType.NUMPY` or `'np'`: Return a batch of `np.ndarray`.
+                    - Unset: Return a list of `np.ndarray`.
+                    - `TensorType.TENSORFLOW` or `'tf'`: Return a batch of type `tf.Tensor`.
+                    - `TensorType.PYTORCH` or `'pt'`: Return a batch of type `torch.Tensor`.
+                    - `TensorType.NUMPY` or `'np'`: Return a batch of type `np.ndarray`.
+                    - `TensorType.JAX` or `'jax'`: Return a batch of type `jax.numpy.ndarray`.
             data_format (`ChannelDimension` or `str`, *optional*, defaults to `ChannelDimension.FIRST`):
                 The channel dimension format for the output image. Can be one of:
-                - `"channels_first"` or `ChannelDimension.FIRST`: image in (num_channels, height, width) format.
-                - `"channels_last"` or `ChannelDimension.LAST`: image in (height, width, num_channels) format.
-                - Unset: Use the channel dimension format of the input image.
+                    - `ChannelDimension.FIRST`: image in (num_channels, height, width) format.
+                    - `ChannelDimension.LAST`: image in (height, width, num_channels) format.
+                Only has an effect if `do_color_quantize` is set to `False`.
             input_data_format (`ChannelDimension` or `str`, *optional*):
                 The channel dimension format for the input image. If unset, the channel dimension format is inferred
                 from the input image. Can be one of:
                 - `"channels_first"` or `ChannelDimension.FIRST`: image in (num_channels, height, width) format.
                 - `"channels_last"` or `ChannelDimension.LAST`: image in (height, width, num_channels) format.
                 - `"none"` or `ChannelDimension.NONE`: image in (height, width) format.
-
-        Returns:
-            [`BatchFeature`]: A [`BatchFeature`] with the following fields:
-
-            - **pixel_values** -- Pixel values to be fed to a model, of shape (batch_size, num_channels, height, width)
-            - **input_ids** -- Color cluster indices of each pixel, of shape (batch_size, seq_length).
         """
-        validate_preprocess_arguments(
-            do_resize=do_resize,
-            size=size,
-            resample=resample,
-        )
-
-        # Define values for compatibility
         do_resize = do_resize if do_resize is not None else self.do_resize
         size = size if size is not None else self.size
+        size = get_size_dict(size)
         resample = resample if resample is not None else self.resample
         do_normalize = do_normalize if do_normalize is not None else self.do_normalize
         do_color_quantize = do_color_quantize if do_color_quantize is not None else self.do_color_quantize
         clusters = clusters if clusters is not None else self.clusters
+        clusters = np.array(clusters)
 
-        # Define values for conversion
         images = make_list_of_images(images)
 
         if not valid_images(images):
@@ -240,67 +231,58 @@ class ImageGPTImageProcessor(BaseImageProcessor):
                 "torch.Tensor, tf.Tensor or jax.ndarray."
             )
 
-        # Conversion to numpy arrays
+        # Here, normalize() is using a constant factor to divide pixel values.
+        # hence, the method does not need iamge_mean and image_std.
+        validate_preprocess_arguments(
+            do_resize=do_resize,
+            size=size,
+            resample=resample,
+        )
+
+        if do_color_quantize and clusters is None:
+            raise ValueError("Clusters must be specified if do_color_quantize is True.")
+
+        # All transformations expect numpy arrays.
         images = [to_numpy_array(image) for image in images]
 
-        # Check what's the channel dimension format of the input images
-        if input_data_format is None:
-            # If no input_data_format given, try to infer it from the images
-            image_channel_formats = [infer_channel_dimension_format(image) for image in images]
-            if len(set(image_channel_formats)) > 1:
-                raise ValueError(
-                    "Images have different channel dimension formats. Please provide the input_data_format argument."
-                )
-            input_data_format = image_channel_formats[0]
+        if do_normalize and is_scaled_image(images[0]):
+            logger.warning_once(
+                "It looks like you are trying to rescale already rescaled images. If you wish to do this, "
+                "make sure to set `do_normalize` to `False` and that pixel values are between [-1, 1].",
+            )
 
-        # Preprocess the images accordingly
+        if input_data_format is None:
+            # We assume that all images have the same channel dimension format.
+            input_data_format = infer_channel_dimension_format(images[0])
+
         if do_resize:
             images = [
                 self.resize(image=image, size=size, resample=resample, input_data_format=input_data_format)
                 for image in images
             ]
 
-        # (conversion to floats for normalization and quantization)
-        input_data_format_for_normalization = input_data_format
         if do_normalize:
-            images = [
-                self.normalize(image=image, input_data_format=input_data_format_for_normalization) for image in images
-            ]
+            images = [self.normalize(image=image, input_data_format=input_data_format) for image in images]
 
-        # Color quantize if needed
         if do_color_quantize:
-            if clusters is None:
-                raise ValueError(
-                    "No clusters provided for color quantization. Please provide clusters to the processor or during preprocessing"
-                )
-            images = [
-                color_quantize(
-                    to_channel_dimension_format(
-                        image, input_data_format=input_data_format, output_data_format=ChannelDimension.LAST
-                    ),
-                    clusters,
-                )
-                for image in images
-            ]
+            images = [to_channel_dimension_format(image, ChannelDimension.LAST, input_data_format) for image in images]
+            # color quantize from (batch_size, height, width, 3) to (batch_size, height, width)
+            images = np.array(images)
+            images = color_quantize(images, clusters).reshape(images.shape[:-1])
 
-            # For clusters we set a new input format!
-            input_data_format = ChannelDimension.NONE
+            # flatten to (batch_size, height*width)
+            batch_size = images.shape[0]
+            images = images.reshape(batch_size, -1)
 
-        # Convert to the output format. Always output 3-dim raw pixels (no quantization).
-        # If color quantized, these will be 1-dim arrays of indices.
-        if do_color_quantize:
-            # We have 1-dim arrays coming from color_quantize, so no format adjustments
-            # If 1-dim integers, we put them into a dict under "input_ids"
-            batch_input_ids = np.stack([np.array(image) for image in images])
-            data = {"input_ids": batch_input_ids}
+            # We need to convert back to a list of images to keep consistent behaviour across processors.
+            images = list(images)
         else:
             images = [
-                to_channel_dimension_format(
-                    image, input_data_format=input_data_format, output_data_format=data_format
-                )
+                to_channel_dimension_format(image, data_format, input_channel_dim=input_data_format)
                 for image in images
             ]
-            data = {"pixel_values": images}
 
-        encoded_inputs = BatchFeature(data=data, tensor_type=return_tensors)
-        return encoded_inputs 
+        data = {"input_ids": images}
+        return BatchFeature(data=data, tensor_type=return_tensors)
+
+__all__ = ["ImageGPTImageProcessor"]

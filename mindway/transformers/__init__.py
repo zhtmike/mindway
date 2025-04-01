@@ -70,6 +70,14 @@ from .models.gpt2 import (
     GPT2Model,
     GPT2PreTrainedModel,
 )
+from .models.imagegpt import (
+    ImageGPTForCausalImageModeling,
+    ImageGPTForImageClassification,
+    ImageGPTModel,
+    ImageGPTPreTrainedModel,
+    ImageGPTFeatureExtractor,
+    ImageGPTImageProcessor
+)
 from .models.llama import LlamaForCausalLM, LlamaForSequenceClassification, LlamaModel, LlamaPreTrainedModel
 from .models.llava import LlavaConfig, LlavaForConditionalGeneration
 from .models.mt5 import (
