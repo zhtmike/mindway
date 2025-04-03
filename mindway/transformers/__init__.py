@@ -74,6 +74,8 @@ from .models.hiera import (
     HieraForPreTraining,
     HieraModel,
     HieraPreTrainedModel,
+    HieraBackbone,
+    HieraForImageClassification
 )
 from .models.llama import LlamaForCausalLM, LlamaForSequenceClassification, LlamaModel, LlamaPreTrainedModel
 from .models.llava import LlavaConfig, LlavaForConditionalGeneration
