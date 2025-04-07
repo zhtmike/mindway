@@ -81,7 +81,7 @@ class GLPNModelTester:
         return config, pixel_values, labels
 
     def get_config(self):
-        # Create HieraConfig using parameters from __init__
+        # Create GLPNConfig using parameters from __init__
         return GLPNConfig(
             image_size=self.image_size,
             num_channels=self.num_channels,
@@ -100,7 +100,7 @@ class GLPNModelTester:
 model_tester = GLPNModelTester()
 config, pixel_values, labels = model_tester.prepare_config_and_inputs()
 
-HIERA_CASES = [
+GLPN_CASES = [
     [
         "GLPNModel",                          
         "transformers.GLPNModel",             
@@ -132,12 +132,12 @@ HIERA_CASES = [
     "name,pt_module,ms_module,init_args,init_kwargs,inputs_args,inputs_kwargs,outputs_map,dtype,mode",
     [
         case + [dtype,] + [mode,] 
-        for case in HIERA_CASES
+        for case in GLPN_CASES
         for dtype in DTYPE_AND_THRESHOLDS.keys()
         for mode in MODES
     ],
 )
-def test_hiera_modules_comparison( 
+def test_glpn_modules_comparison( 
     name,
     pt_module,
     ms_module,
@@ -150,7 +150,7 @@ def test_hiera_modules_comparison(
     mode,
 ):
     """
-    Compares the forward pass outputs of PyTorch and MindSpore Hiera models.
+    Compares the forward pass outputs of PyTorch and MindSpore GLPN models.
     """
     ms.set_context(mode=mode)
     threshold = DTYPE_AND_THRESHOLDS[dtype]
