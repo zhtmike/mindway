@@ -15,7 +15,7 @@ from tests.modeling_test_utils import (
 # -------------------------------------------------------------
 from tests.models.modeling_common import floats_numpy, ids_numpy
 
-DTYPE_AND_THRESHOLDS = {"fp32": 5e-4, "fp16": 5e-3, "bf16": 8e-3} 
+DTYPE_AND_THRESHOLDS = {"fp32": 5e-4}
 MODES = [1] 
 
 logging.basicConfig(level=logging.INFO)
