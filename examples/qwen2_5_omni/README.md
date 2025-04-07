@@ -1,0 +1,384 @@
+# Qwen2.5-Omni
+
+## Overview
+
+Qwen2.5-Omni [Qwen2.5-Omni](https://qwenlm.github.io/blog/qwen2.5-omni/) is an end-to-end multimodal model designed to perceive diverse modalities, including text, images, audio, and video, while simultaneously generating text and natural speech responses in a streaming manner.
+
+The abstract from the [Qwen2.5-Omni Technical Report](https://arxiv.org/abs/2503.20215) is the following:
+
+> We present Qwen2.5-Omni, an end-to-end multimodal model designed to perceive diverse modalities, including text, images, audio, and video, while simultaneously generating text and natural speech responses in a streaming manner. To enable the streaming of multimodal information inputs, both audio and visual encoders utilize a block-wise processing approach. This strategy effectively decouples the handling of long sequences of multimodal data, assigning the perceptual responsibilities to the multimodal encoder and entrusting the modeling of extended sequences to a large language model. Such a division of labor enhances the fusion of different modalities via the shared attention mechanism. To synchronize the timestamps of video inputs with audio, we organized the audio and video sequentially in an interleaved manner and propose a novel position embedding approach, named TMRoPE (Time-aligned Multimodal RoPE). To concurrently generate text and speech while avoiding interference between the two modalities, we propose Thinker-Talker architecture. In this framework, Thinker functions as a large language model tasked with text generation, while Talker is a dual-track autoregressive model that directly utilizes the hidden representations from the Thinker to produce audio tokens as output. Both the Thinker and Talker models are designed to be trained and inferred in an end-to-end manner. For decoding audio tokens in a streaming manner, we introduce a sliding-window DiT that restricts the receptive field, aiming to reduce the initial package delay. Qwen2.5-Omni outperforms the similarly sized Qwen2-VL and Qwen2-Audio in both image and audio capabilities. Furthermore, Qwen2.5-Omni achieves state-of-the-art performance on multimodal benchmarks like Omni-Bench. Notably, Qwen2.5-Omni is the first open-source model to achieve a level of performance in end-to-end speech instruction following that is comparable to its capabilities with text inputs, as evidenced by benchmarks such as MMLU and GSM8K. As for speech generation, Qwen2.5-Omni’s streaming Talker outperform most existing streaming and non-streaming alternatives in robustness and naturalness.
+
+
+## Get Started
+## Requirements:
+|mindspore |	ascend driver | firmware | cann tookit/kernel|
+|--- | --- | --- | --- |
+|2.5.0 | 24.1RC3 | 7.3.0.1.231 | 8.0.RC3.beta1|
+
+### Installation
+```
+cd examples/qwen2_5_omni
+pip install -r requirements.txt
+```
+
+### Usage example
+
+`Qwen2.5-Omni-7B` chekpoint can be found on the [Huggingface Hub](https://huggingface.co/collections/Qwen/qwen25-omni-67de1e5f0f9464dc6314b36e).
+
+### Single Media inference
+
+The model can accept text, images, audio and videos as input. Here's an example code for inference.
+
+```python
+import soundfile as sf
+import mindspore as ms
+from mindway.transformers import Qwen2_5OmniModel, Qwen2_5OmniProcessor
+
+model = Qwen2_5OmniModel.from_pretrained("Qwen/Qwen2.5-Omni-7B")
+processor = Qwen2_5OmniProcessor.from_pretrained("Qwen/Qwen2.5-Omni-7B")
+
+conversation = [
+    {
+        "role": "system",
+        "content": [
+            {"type": "text", "text": "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech."}
+        ],
+    },
+    {
+        "role": "user",
+        "content": [
+            {"type": "video", "video": "/path/to/video.mp4"},
+            {"type": "text", "text": "What cant you hear and see in this video?"},
+        ],
+    },
+]
+
+inputs = processor.apply_chat_template(
+    conversations,
+    load_audio_from_video=True,
+    add_generation_prompt=True,
+    tokenize=True,
+    return_dict=True,
+    return_tensors="np",
+    video_fps=1,
+
+    # kwargs to be passed to `Qwen2-5-OmniProcessor`
+    padding=True,
+    use_audio_in_video=True,
+)
+# convert input to Tensor
+for key, value in inputs.items():
+    if isinstance(value, np.ndarray):
+        inputs[key] = ms.Tensor(value)
+    elif isinstance(value, list):
+        inputs[key] = ms.Tensor(value)
+    if inputs[key].dtype == ms.int64:
+        inputs[key] = inputs[key].to(ms.int32)
+
+text_ids, audio = model.generate(**inputs, use_audio_in_video=True)
+text = processor.batch_decode(text_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+
+sf.write(
+    "output.wav",
+    audio.reshape(-1).asnumpy(),
+    samplerate=24000,
+)
+print(text)
+```
+
+### Text-only generation
+
+To generate only text output and save compute by not loading the audio generation model, we can set `enable_audio_output=False` when loading the model.
+
+```python
+import mindspore as ms
+from mindway.transformers import Qwen2_5OmniModel, Qwen2_5OmniProcessor
+
+model = Qwen2_5OmniModel.from_pretrained(
+    "Qwen/Qwen2.5-Omni-7B",
+    enable_audio_output=False,
+)
+processor = Qwen2_5OmniProcessor.from_pretrained("Qwen/Qwen2.5-Omni-7B")
+
+conversation = [
+    {
+        "role": "system",
+        "content": [
+            {"type": "text", "text": "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech."}
+        ],
+    },
+    {
+        "role": "user",
+        "content": [
+            {"type": "video", "video": "/path/to/video.mp4"},
+            {"type": "text", "text": "What cant you hear and see in this video?"},
+        ],
+    },
+]
+
+inputs = processor.apply_chat_template(
+    conversations,
+    load_audio_from_video=True,
+    add_generation_prompt=True,
+    tokenize=True,
+    return_dict=True,
+    return_tensors="np",
+    video_fps=1,
+
+    # kwargs to be passed to `Qwen2-5-OmniProcessor`
+    padding=True,
+    use_audio_in_video=True,
+)
+# convert input to Tensor
+for key, value in inputs.items():
+    if isinstance(value, np.ndarray):
+        inputs[key] = ms.Tensor(value)
+    elif isinstance(value, list):
+        inputs[key] = ms.Tensor(value)
+    if inputs[key].dtype == ms.int64:
+        inputs[key] = inputs[key].to(ms.int32)
+
+text_ids = model.generate(**inputs, use_audio_in_video=True, return_audio=False)
+text = processor.batch_decode(text_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+
+sf.write(
+    "output.wav",
+    audio.reshape(-1).asnumpy(),
+    samplerate=24000,
+)
+print(text)
+```
+
+### Batch Mixed Media Inference
+
+The model can batch inputs composed of mixed samples of various types such as text, images, audio and videos as input when `return_audio=False` is set. Here is an example.
+
+```python
+import soundfile as sf
+import mindspore as ms
+from transformers import Qwen2_5OmniForConditionalGeneration, Qwen2_5OmniProcessor
+
+model = Qwen2_5OmniForConditionalGeneration.from_pretrained("Qwen/Qwen2.5-Omni-7B")
+processor = Qwen2_5OmniProcessor.from_pretrained("Qwen/Qwen2.5-Omni-7B")
+
+# Conversation with video only
+conversation1 = [
+    {
+        "role": "system",
+        "content": [
+            {"type": "text", "text": "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech."}
+        ],
+    },
+    {
+        "role": "user",
+        "content": [
+            {"type": "video", "path": "/path/to/video.mp4"},
+        ]
+    }
+]
+
+# Conversation with audio only
+conversation2 = [
+    {
+        "role": "system",
+        "content": [
+            {"type": "text", "text": "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech."}
+        ],
+    },
+    {
+        "role": "user",
+        "content": [
+            {"type": "audio", "path": "/path/to/audio.wav"},
+        ]
+    }
+]
+
+# Conversation with pure text
+conversation3 = [
+    {
+        "role": "system",
+        "content": [
+            {"type": "text", "text": "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech."}
+        ],
+    },
+    {
+        "role": "user",
+        "content": [{"type": "text", "text": "who are you?"}],
+    }
+]
+
+
+# Conversation with mixed media
+conversation4 = [
+    {
+        "role": "system",
+        "content": [
+            {"type": "text", "text": "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech."}
+        ],
+    },
+    {
+        "role": "user",
+        "content": [
+            {"type": "image", "path": "/path/to/image.jpg"},
+            {"type": "video", "path": "/path/to/video.mp4"},
+            {"type": "audio", "path": "/path/to/audio.wav"},
+            {"type": "text", "text": "What are the elements can you see and hear in these medias?"},
+        ],
+    }
+]
+
+conversations = [conversation1, conversation2, conversation3, conversation4]
+
+inputs = processor.apply_chat_template(
+    conversations,
+    load_audio_from_video=True,
+    add_generation_prompt=True,
+    tokenize=True,
+    return_dict=True,
+    return_tensors="np",
+    video_fps=1,
+
+    # kwargs to be passed to `Qwen2-5-OmniProcessor`
+    padding=True,
+    use_audio_in_video=True,
+)
+# convert input to Tensor
+for key, value in inputs.items():
+    if isinstance(value, np.ndarray):
+        inputs[key] = ms.Tensor(value)
+    elif isinstance(value, list):
+        inputs[key] = ms.Tensor(value)
+    if inputs[key].dtype == ms.int64:
+        inputs[key] = inputs[key].to(ms.int32)
+
+text_ids = model.generate(**inputs, use_audio_in_video=True)
+text = processor.batch_decode(text_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+
+print(text)
+```
+
+### Usage Tips
+
+#### Image Resolution trade-off
+
+The model supports a wide range of resolution inputs. By default, it uses the native resolution for input, but higher resolutions can enhance performance at the cost of more computation. Users can set the minimum and maximum number of pixels to achieve an optimal configuration for their needs.
+
+```python
+min_pixels = 128*28*28
+max_pixels = 768*28*28
+processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-Omni-7B", min_pixels=min_pixels, max_pixels=max_pixels)
+```
+
+#### Prompt for audio output
+If users need audio output, the system prompt must be set as "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech.", otherwise the audio output may not work as expected.
+```
+{
+    "role": "system",
+    "content": "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech.",
+}
+```
+
+#### Use audio output or not
+
+The model supports both text and audio outputs, if users do not need audio outputs, they can set `enable_audio_output` in the `from_pretrained` function. This option will save about `~2GB` of GPU memory but the `return_audio` option for `generate` function will only allow to be set at `False`.
+```python
+model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
+    "Qwen/Qwen2.5-Omni-7B",
+    enable_audio_output=False,
+)
+```
+
+In order to obtain a flexible experience, we recommend that users set `enable_audio_output` at `True` when initializing the model through `from_pretrained` function, and then decide whether to return audio when `generate` function is called. When `return_audio` is set to `False`, the model will only return text outputs to get text responses faster.
+
+```python
+model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
+    "Qwen/Qwen2.5-Omni-7B",
+    enable_audio_output=True,
+)
+...
+text_ids = model.generate(**inputs, return_audio=False)
+```
+
+#### Change voice type of output audio
+Qwen2.5-Omni supports the ability to change the voice of the output audio. Users can use the `spk` parameter of `generate` function to specify the voice type. The `"Qwen/Qwen2.5-Omni-7B"` checkpoint support two voice types: `Chelsie` and `Ethan`, while `Chelsie` is a female voice and `Ethan` is a male voice. By defalut, if `spk` is not specified, the default voice type is `Chelsie`.
+
+```python
+text_ids, audio = model.generate(**inputs, spk="Chelsie")
+```
+
+```python
+text_ids, audio = model.generate(**inputs, spk="Ethan")
+```
+
+#### Flash-Attention 2 to speed up generation
+
+You should have Ascend hardware that is compatible with FlashAttention 2. Read more about it in the official documentation of the [flash attention repository](https://www.mindspore.cn/docs/en/master/api_python/ops/mindspore.ops.flash_attention_score.html).
+
+To load and run a model using FlashAttention-2, add `attn_implementation="flash_attention_2"` when loading the model:
+
+```python
+from mindway.transformers import Qwen2_5OmniForConditionalGeneration
+
+model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
+    "Qwen/Qwen2.5-Omni-7B",
+    mindspore_dtype=mindspore.bfloat16,
+    attn_implementation="flash_attention_2",
+)
+```
+
+
+
+## Qwen2_5OmniConfig
+
+
+
+## Qwen2_5OmniProcessor
+
+
+
+## Qwen2_5OmniForConditionalGeneration
+
+
+
+## Qwen2_5OmniPreTrainedModelForConditionalGeneration
+
+
+
+## Qwen2_5OmniThinkerConfig
+
+
+
+## Qwen2_5OmniThinkerForConditionalGeneration
+
+
+
+## Qwen2_5OmniThinkerTextModel
+
+
+
+## Qwen2_5OmniTalkerConfig
+
+
+
+## Qwen2_5OmniTalkerForConditionalGeneration
+
+
+
+## Qwen2_5OmniTalkerModel
+
+
+
+## Qwen2_5OmniToken2WavConfig
+
+
+
+## Qwen2_5OmniToken2WavModel
+
+
+
+## Qwen2_5OmniToken2WavDiTModel
+
+
+
+## Qwen2_5OmniToken2WavBigVGANModel
+
