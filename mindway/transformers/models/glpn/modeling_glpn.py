@@ -558,8 +558,6 @@ class GLPNSelectiveFeatureFusion(nn.Cell):
             in_channels=int(in_channel / 2), out_channels=2, kernel_size=3, stride=1, padding=1
         )
 
-        # self.sigmoid = mint.nn.Sigmoid()
-
     def construct(self, local_features, global_features):
         # concatenate features along the channel dimension
         features = mint.cat((local_features, global_features), dim=1)
