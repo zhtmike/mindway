@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "mindway"
 dynamic = ["version"]
-description = "ONE for all, Optimal generator with No Exception."
+description = "the way -> '道' ; focus on multimodal large language model mllm."
 readme = "README.md"
 requires-python = ">=3.8"
 license = "Apache-2.0"
@@ -35,7 +35,7 @@ dependencies = [
     "numpy<2.0",
     "huggingface-hub>=0.20.2",
     "safetensors>=0.3.1",
-    "transformers==4.46.3",
+    "transformers==4.50.0",
 ]
 
 [project.optional-dependencies]
