@@ -119,7 +119,7 @@ class ImageGPTAttention(nn.Cell):
         self.pruned_heads = self.pruned_heads.union(heads)
 
     def _attn(self, query, key, value, attention_mask=None, head_mask=None):
-        attn_weights = mint.matmul(query, key.transpose(-1, -2))
+        attn_weights = mint.matmul(query, mint.transpose(key, -1, -2))
 
         if self.scale_attn_weights:
             attn_weights = attn_weights / mint.sqrt(ms.tensor(value.shape[-1], dtype=attn_weights.dtype))
@@ -174,7 +174,7 @@ class ImageGPTAttention(nn.Cell):
 
         # Upcast (turn off autocast) and reorder (Scale K by 1 / root(dk))
         # TODO:  cast to float32??
-        q, k = query.reshape(-1, q_seq_len, dk), key.transpose(-1, -2).reshape(-1, dk, k_seq_len)
+        q, k = query.reshape(-1, q_seq_len, dk), mint.transpose(key, -1, -2).reshape(-1, dk, k_seq_len)
         attn_weights = mint.baddbmm(attn_weights, q.float(), k.float(), beta=0, alpha=scale_factor)
         attn_weights = attn_weights.reshape(bsz, num_heads, q_seq_len, k_seq_len)
         

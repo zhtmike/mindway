@@ -15,8 +15,8 @@ from tests.modeling_test_utils import (
 # -------------------------------------------------------------
 from tests.models.modeling_common import floats_numpy, ids_numpy, random_attention_mask
 
-DTYPE_AND_THRESHOLDS = {"fp32": 5e-4}
-MODES = [1] 
+DTYPE_AND_THRESHOLDS = {"fp32": 5e-4, "fp16": 5e-3, "bf16": 5e-3}
+MODES = [0, 1] 
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -147,8 +147,10 @@ IMAGEGPT_CASES = [
         "mindway.transformers.ImageGPTModel",     
         (config,),                             
         {},                                    
-        (input_ids),                      
-        {},                                    
+        (input_ids,),                      
+        {
+            "head_mask": head_mask,
+        },                                    
         {                                      
             "last_hidden_state": "last_hidden_state",            
         },
@@ -160,6 +162,9 @@ IMAGEGPT_CASES = [
         (config,),
         {},
         (input_ids,),
+        {
+            "head_mask": head_mask,
+        },  
         {
             "logits": "logits",
         },
