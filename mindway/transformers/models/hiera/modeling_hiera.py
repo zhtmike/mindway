@@ -19,25 +19,16 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
 
 import mindspore as ms
-from mindspore import nn, mint, ops
+from mindspore import mint, nn, ops
 from mindspore.mint.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-from mindspore.common.initializer import TruncatedNormal, initializer
+
+from transformers.utils import ModelOutput
 
 from ...activations import ACT2FN
-from ...modeling_outputs import (
-    BackboneOutput,
-    BaseModelOutput,
-    BaseModelOutputWithPooling,
-    ImageClassifierOutput,
-)
-from transformers.utils import ModelOutput
+from ...modeling_outputs import BackboneOutput, BaseModelOutput, BaseModelOutputWithPooling, ImageClassifierOutput
 from ...modeling_utils import MSPreTrainedModel
-from ...utils import (
-    # add_code_sample_docstrings,
-    # add_start_docstrings,
-    # add_start_docstrings_to_model_forward,
+from ...utils import (  # add_code_sample_docstrings,; add_start_docstrings,; add_start_docstrings_to_model_forward,; replace_return_docstrings,
     logging,
-    # replace_return_docstrings,
     mindspore_int,
 )
 from ...utils.backbone_utils import BackboneMixin
@@ -235,9 +226,7 @@ class HieraPatchEmbeddings(nn.Cell):
             padding=tuple(config.patch_padding),
         )
 
-    def masked_conv(
-        self, pixel_values: ms.Tensor, bool_masked_pos: Optional[ms.Tensor] = None
-    ) -> ms.Tensor:
+    def masked_conv(self, pixel_values: ms.Tensor, bool_masked_pos: Optional[ms.Tensor] = None) -> ms.Tensor:
         """Zero-out the masked regions of the input before conv.
         Prevents leakage of masked regions when using overlapping kernels.
         """
@@ -252,9 +241,7 @@ class HieraPatchEmbeddings(nn.Cell):
 
         return self.projection(pixel_values * bool_masked_pos)
 
-    def random_masking(
-        self, pixel_values: ms.Tensor, noise: Optional[ms.Tensor] = None
-    ) -> Tuple[ms.Tensor, ms.Tensor]:
+    def random_masking(self, pixel_values: ms.Tensor, noise: Optional[ms.Tensor] = None) -> Tuple[ms.Tensor, ms.Tensor]:
         """
         Perform per-sample random masking by per-sample shuffling. Per-sample shuffling is done by argsort random
         noise.
@@ -291,9 +278,7 @@ class HieraPatchEmbeddings(nn.Cell):
         pixel_values: ms.Tensor,
         noise: Optional[ms.Tensor] = None,
     ) -> Tuple[ms.Tensor, Optional[ms.Tensor], Optional[ms.Tensor]]:
-        (bool_masked_pos, ids_restore) = (
-            self.random_masking(pixel_values, noise=noise) if self.is_mae else (None, None)
-        )
+        (bool_masked_pos, ids_restore) = self.random_masking(pixel_values, noise=noise) if self.is_mae else (None, None)
 
         embeddings = self.masked_conv(pixel_values, bool_masked_pos)
         embeddings = embeddings.flatten(2)
@@ -543,9 +528,7 @@ class HieraLayer(nn.Cell):
         if self.hidden_size != self.hidden_size_output:
             hidden_states = self.proj(hidden_states_norm)
             # Refer to unroll to see how this performs a maxpool-Nd
-            hidden_states = (
-                hidden_states.view(batch_size, self.query_stride, -1, self.hidden_size_output).max(dim=1)[0]
-            )
+            hidden_states = hidden_states.view(batch_size, self.query_stride, -1, self.hidden_size_output).max(dim=1)[0]
 
         (hidden_states_norm, attn_weights) = self.attn(
             hidden_states_norm, head_mask, output_attentions=output_attentions
@@ -601,13 +584,10 @@ class HieraStage(nn.Cell):
     def construct(
         self, hidden_states: ms.Tensor, head_mask: Optional[ms.Tensor], output_attentions: bool = False
     ) -> Tuple[ms.Tensor, Optional[ms.Tensor]]:
-        
         last_attn_weights: Optional[ms.Tensor] = None
         for i, layer_module in enumerate(self.layers):
             layer_head_mask = head_mask[i] if head_mask is not None else None
-            layer_output = layer_module(
-                hidden_states, layer_head_mask, output_attentions=output_attentions
-            )
+            layer_output = layer_module(hidden_states, layer_head_mask, output_attentions=output_attentions)
             hidden_states = layer_output[0]
             if output_attentions:
                 last_attn_weights = layer_output[1]
@@ -625,7 +605,8 @@ def undo_windowing(hidden_states: ms.Tensor, shape: List[int], mask_unit_shape: 
         mask_unit_shape (`List[int]`): The shape of the mask units used for windowing.
 
     Returns:
-        ms.Tensor: The restored hidden states tensor of shape [batch_size, num_mask_unit_height*mask_unit_height, num_mask_unit_width*mask_unit_width, hidden_size].
+        ms.Tensor: The restored hidden states tensor of shape [batch_size, num_mask_unit_height*mask_unit_height,
+        num_mask_unit_width*mask_unit_width, hidden_size].
     """
     batch_size, hidden_size = hidden_states.shape[0], hidden_states.shape[-1]
     # From: [batch_size, num_mask_unit_height*num_mask_unit_width, hidden_size]
@@ -648,7 +629,7 @@ class HieraEncoder(nn.Cell):
         # stochastic depth decay rule
         dpr = [x.item() for x in mint.linspace(0, config.drop_path_rate, total_depth)]
         # query strides rule
-        cumulative_depths = ms.tensor(config.depths, dtype = ms.int32).cumsum(0).tolist()
+        cumulative_depths = ms.tensor(config.depths, dtype=ms.int32).cumsum(0).tolist()
         query_pool_layer = cumulative_depths[: config.num_query_pool]
         query_strides = [math.prod(config.query_stride) if i in query_pool_layer else 1 for i in range(total_depth)]
 
@@ -1112,12 +1093,8 @@ class HieraDecoder(nn.Cell):
         mask_unit_height, mask_unit_width, decoder_hidden_size = hidden_states.shape[2:]
         batch_size, num_mask_units = bool_masked_pos.shape
 
-        decoder_hidden_states = mint.zeros((
-            batch_size,
-            num_mask_units,
-            mask_unit_height,
-            mask_unit_width,
-            decoder_hidden_size),
+        decoder_hidden_states = mint.zeros(
+            (batch_size, num_mask_units, mask_unit_height, mask_unit_width, decoder_hidden_size),
             dtype=hidden_states.dtype,
         )
         mask_tokens = self.mask_token.view(1, 1, 1, 1, -1)
@@ -1223,6 +1200,7 @@ class HieraMultiScaleHead(nn.Cell):
 
 #     Note that we provide a script to pre-train this model on custom data in our [examples
 #     directory](https://github.com/huggingface/transformers/tree/main/examples/pytorch/image-pretraining).
+
 
 #     </Tip>
 #     """,
@@ -1373,6 +1351,7 @@ class HieraForPreTraining(HieraPreTrainedModel):
 #         setting `interpolate_pos_encoding` to `True` in the forward of the model. This will interpolate the pre-trained
 #         position embeddings to the higher resolution.
 
+
 #     </Tip>
 #     """,
 #     HIERA_START_DOCSTRING,
@@ -1441,7 +1420,9 @@ class HieraForImageClassification(HieraPreTrainedModel):
             if self.config.problem_type is None:
                 if self.num_labels == 1:
                     self.config.problem_type = "regression"
-                elif self.num_labels > 1: #TODO: check it and (labels.dtype == torch.long or labels.dtype == torch.int):
+                elif (
+                    self.num_labels > 1
+                ):  # TODO: check it and (labels.dtype == torch.long or labels.dtype == torch.int):
                     self.config.problem_type = "single_label_classification"
                 else:
                     self.config.problem_type = "multi_label_classification"
@@ -1575,6 +1556,5 @@ class HieraBackbone(HieraPreTrainedModel, BackboneMixin):
             attentions=outputs[2] if output_attentions else None,
         )
 
+
 __all__ = ["HieraForImageClassification", "HieraForPreTraining", "HieraBackbone", "HieraModel", "HieraPreTrainedModel"]
-
-

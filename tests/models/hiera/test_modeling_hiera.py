@@ -1,22 +1,19 @@
-import inspect
 import logging
+
 import numpy as np
 import pytest
 import torch
-from transformers import HieraConfig 
 
 import mindspore as ms
 
-from tests.modeling_test_utils import (
-    compute_diffs,
-    generalized_parse_args,
-    get_modules,
-)
+from tests.modeling_test_utils import compute_diffs, generalized_parse_args, get_modules
+
 # -------------------------------------------------------------
 from tests.models.modeling_common import floats_numpy, ids_numpy
+from transformers import HieraConfig
 
 DTYPE_AND_THRESHOLDS = {"fp32": 5e-4}
-MODES = [1] 
+MODES = [1]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -69,7 +66,6 @@ class HieraModelTester:
         self.scope = scope
         self.type_sequence_label_size = type_sequence_label_size
 
-
     def prepare_config_and_inputs(self):
         # Generate pixel values (B, C, H, W) as numpy float arrays
         pixel_values = floats_numpy([self.batch_size, self.num_channels, self.image_size[0], self.image_size[1]])
@@ -110,27 +106,27 @@ config, pixel_values, labels = model_tester.prepare_config_and_inputs()
 
 HIERA_CASES = [
     [
-        "HieraModel",                          
-        "transformers.HieraModel",             
-        "mindway.transformers.HieraModel",     
-        (config,),                             
-        {},                                    
-        (pixel_values,),                      
-        {},                                    
-        {                                      
-            "last_hidden_state": "last_hidden_state",            
+        "HieraModel",
+        "transformers.HieraModel",
+        "mindway.transformers.HieraModel",
+        (config,),
+        {},
+        (pixel_values,),
+        {},
+        {
+            "last_hidden_state": "last_hidden_state",
         },
     ],
     [
         "HieraForImageClassification_Logits",
         "transformers.HieraForImageClassification",
         "mindway.transformers.HieraForImageClassification",
-        (config,),                           
+        (config,),
         {},
-        (pixel_values,),                       
-        {},                                    
-        {                                     
-            "logits": "logits",   
+        (pixel_values,),
+        {},
+        {
+            "logits": "logits",
         },
     ],
 ]
@@ -139,13 +135,19 @@ HIERA_CASES = [
 @pytest.mark.parametrize(
     "name,pt_module,ms_module,init_args,init_kwargs,inputs_args,inputs_kwargs,outputs_map,dtype,mode",
     [
-        case + [dtype,] + [mode,] 
+        case
+        + [
+            dtype,
+        ]
+        + [
+            mode,
+        ]
         for case in HIERA_CASES
         for dtype in DTYPE_AND_THRESHOLDS.keys()
         for mode in MODES
     ],
 )
-def test_hiera_modules_comparison( 
+def test_hiera_modules_comparison(
     name,
     pt_module,
     ms_module,
@@ -173,7 +175,7 @@ def test_hiera_modules_comparison(
         pt_dtype, ms_dtype, *inputs_args, **inputs_kwargs
     )
 
-    pt_model.eval() 
+    pt_model.eval()
     with torch.no_grad():
         pt_outputs = pt_model(*pt_inputs_args, **pt_inputs_kwargs)
 
@@ -185,17 +187,14 @@ def test_hiera_modules_comparison(
     ms_outputs_to_compare = []
 
     for pt_key, ms_key in outputs_map.items():
-        try:
-            pt_output = getattr(pt_outputs, pt_key)
-        except AttributeError:
-                raise AttributeError(f"Output key '{pt_key}' not found in PyTorch output object {type(pt_outputs)}.")
+        if pt_key not in pt_outputs.__dict__:
+            raise AttributeError(f"Output key '{pt_key}' not in PyTorch output object {type(pt_outputs)}.")
+        if ms_key not in ms_outputs.__dict__:
+            raise IndexError(f"Output index {ms_key} not in MindSpore output object {type(ms_outputs)}.")
 
-        try:
-            ms_output = getattr(ms_outputs, ms_key)
-        except IndexError:
-            raise IndexError(f"Output index {ms_key} not found in PyTorch output object {type(ms_outputs)}.")
+        pt_output = getattr(pt_outputs, pt_key)
+        ms_output = getattr(ms_outputs, ms_key)
 
-        
         pt_outputs_to_compare.append(pt_output)
         ms_outputs_to_compare.append(ms_output)
 
@@ -211,4 +210,3 @@ def test_hiera_modules_comparison(
         f"Outputs differences {np.array(diffs).tolist()} exceeded threshold {threshold}"
     )
     logger.info(f"--- Test Passed: {name} | Mode: {mode} | DType: {dtype} ---")
-

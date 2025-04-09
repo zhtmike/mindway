@@ -15,9 +15,10 @@
 """Hiera model configuration"""
 
 from transformers.configuration_utils import PretrainedConfig
+from transformers.utils import BackboneConfigMixin
+
 from ...utils import logging
 from ...utils.backbone_utils import get_aligned_output_features_output_indices
-from transformers.utils import BackboneConfigMixin
 
 logger = logging.get_logger(__name__)
 
