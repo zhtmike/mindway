@@ -1,14 +1,7 @@
 """MindSpore OpenAI ImageGPT configuration"""
-
-from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Mapping, Optional
-
 from transformers.configuration_utils import PretrainedConfig
+
 from ...utils import logging
-
-
-if TYPE_CHECKING:
-    from ... import FeatureExtractionMixin, TensorType
 
 logger = logging.get_logger(__name__)
 
@@ -128,4 +121,4 @@ class ImageGPTConfig(PretrainedConfig):
         super().__init__(tie_word_embeddings=tie_word_embeddings, **kwargs)
 
 
-__all__ = ["ImageGPTConfig"] 
+__all__ = ["ImageGPTConfig"]

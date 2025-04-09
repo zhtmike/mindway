@@ -1,22 +1,19 @@
-import inspect
 import logging
+
 import numpy as np
 import pytest
 import torch
-from transformers import ImageGPTConfig 
 
 import mindspore as ms
 
-from tests.modeling_test_utils import (
-    compute_diffs,
-    generalized_parse_args,
-    get_modules,
-)
+from tests.modeling_test_utils import compute_diffs, generalized_parse_args, get_modules
+
 # -------------------------------------------------------------
-from tests.models.modeling_common import floats_numpy, ids_numpy, random_attention_mask
+from tests.models.modeling_common import ids_numpy, random_attention_mask
+from transformers import ImageGPTConfig
 
 DTYPE_AND_THRESHOLDS = {"fp32": 5e-4, "fp16": 5e-3, "bf16": 5e-3}
-MODES = [0, 1] 
+MODES = [0, 1]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -71,7 +68,9 @@ class ImageGPTModelTester:
         self.num_choices = num_choices
         self.scope = None
 
-    def prepare_config_and_inputs(self, gradient_checkpointing=False, scale_attn_by_inverse_layer_idx=False, reorder_and_upcast_attn=False):
+    def prepare_config_and_inputs(
+        self, gradient_checkpointing=False, scale_attn_by_inverse_layer_idx=False, reorder_and_upcast_attn=False
+    ):
         input_ids = ids_numpy([self.batch_size, self.seq_length], self.vocab_size - 1)
 
         input_mask = None
@@ -114,7 +113,6 @@ class ImageGPTModelTester:
             choice_labels,
         )
 
-
     def get_config(
         self, gradient_checkpointing=False, scale_attn_by_inverse_layer_idx=False, reorder_and_upcast_attn=False
     ):
@@ -138,21 +136,31 @@ class ImageGPTModelTester:
 
 
 model_tester = ImageGPTModelTester()
-config, input_ids, input_mask, head_mask, token_type_ids, mc_token_ids, sequence_labels, token_labels, choice_labels = model_tester.prepare_config_and_inputs()
+(
+    config,
+    input_ids,
+    input_mask,
+    head_mask,
+    token_type_ids,
+    mc_token_ids,
+    sequence_labels,
+    token_labels,
+    choice_labels,
+) = model_tester.prepare_config_and_inputs()
 
 IMAGEGPT_CASES = [
     [
-        "ImageGPTModel",                          
-        "transformers.ImageGPTModel",             
-        "mindway.transformers.ImageGPTModel",     
-        (config,),                             
-        {},                                    
-        (input_ids,),                      
+        "ImageGPTModel",
+        "transformers.ImageGPTModel",
+        "mindway.transformers.ImageGPTModel",
+        (config,),
+        {},
+        (input_ids,),
         {
             "head_mask": head_mask,
-        },                                    
-        {                                      
-            "last_hidden_state": "last_hidden_state",            
+        },
+        {
+            "last_hidden_state": "last_hidden_state",
         },
     ],
     [
@@ -164,24 +172,30 @@ IMAGEGPT_CASES = [
         (input_ids,),
         {
             "head_mask": head_mask,
-        },  
+        },
         {
             "logits": "logits",
         },
-    ]
+    ],
 ]
 
 
 @pytest.mark.parametrize(
     "name,pt_module,ms_module,init_args,init_kwargs,inputs_args,inputs_kwargs,outputs_map,dtype,mode",
     [
-        case + [dtype,] + [mode,] 
+        case
+        + [
+            dtype,
+        ]
+        + [
+            mode,
+        ]
         for case in IMAGEGPT_CASES
         for dtype in DTYPE_AND_THRESHOLDS.keys()
         for mode in MODES
     ],
 )
-def test_imagegpt_modules_comparison( 
+def test_imagegpt_modules_comparison(
     name,
     pt_module,
     ms_module,
@@ -209,7 +223,7 @@ def test_imagegpt_modules_comparison(
         pt_dtype, ms_dtype, *inputs_args, **inputs_kwargs
     )
 
-    pt_model.eval() 
+    pt_model.eval()
     with torch.no_grad():
         pt_outputs = pt_model(*pt_inputs_args, **pt_inputs_kwargs)
 
@@ -221,17 +235,14 @@ def test_imagegpt_modules_comparison(
     ms_outputs_to_compare = []
 
     for pt_key, ms_key in outputs_map.items():
-        try:
-            pt_output = getattr(pt_outputs, pt_key)
-        except AttributeError:
-                raise AttributeError(f"Output key '{pt_key}' not found in PyTorch output object {type(pt_outputs)}.")
+        if pt_key not in pt_outputs.__dict__:
+            raise AttributeError(f"Output key '{pt_key}' not in PyTorch output object {type(pt_outputs)}.")
+        if ms_key not in ms_outputs.__dict__:
+            raise IndexError(f"Output index {ms_key} not in MindSpore output object {type(ms_outputs)}.")
 
-        try:
-            ms_output = getattr(ms_outputs, ms_key)
-        except IndexError:
-            raise IndexError(f"Output index {ms_key} not found in PyTorch output object {type(ms_outputs)}.")
+        pt_output = getattr(pt_outputs, pt_key)
+        ms_output = getattr(ms_outputs, ms_key)
 
-        
         pt_outputs_to_compare.append(pt_output)
         ms_outputs_to_compare.append(ms_output)
 
@@ -247,4 +258,3 @@ def test_imagegpt_modules_comparison(
         f"Outputs differences {np.array(diffs).tolist()} exceeded threshold {threshold}"
     )
     logger.info(f"--- Test Passed: {name} | Mode: {mode} | DType: {dtype} ---")
-

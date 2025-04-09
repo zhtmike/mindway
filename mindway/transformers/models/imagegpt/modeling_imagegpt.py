@@ -1,37 +1,32 @@
 """MindSpore OpenAI ImageGPT model."""
 
-import math
-import os
 import warnings
 from typing import Any, Optional, Tuple, Union
+
 import numpy as np
+
 import mindspore as ms
-from mindspore import nn, mint
-from mindspore.common.initializer import initializer, TruncatedNormal
+from mindspore import mint, nn
 
 from ...activations import ACT2FN
 from ...generation import GenerationMixin
+from ...mindspore_utils import Conv1D, find_pruneable_heads_and_indices, prune_conv1d_layer
 from ...modeling_outputs import (
     BaseModelOutputWithPastAndCrossAttentions,
     CausalLMOutputWithCrossAttentions,
     SequenceClassifierOutputWithPast,
 )
 from ...modeling_utils import MSPreTrainedModel
-from ...mindspore_utils import Conv1D, find_pruneable_heads_and_indices, prune_conv1d_layer
-
-from ...utils import (
-    # add_start_docstrings,
-    # add_start_docstrings_to_model_forward,
+from ...utils import (  # add_start_docstrings,; add_start_docstrings_to_model_forward,; replace_return_docstrings,
     logging,
-    # replace_return_docstrings,
 )
 from .configuration_imagegpt import ImageGPTConfig
-
 
 logger = logging.get_logger(__name__)
 
 _CHECKPOINT_FOR_DOC = "openai/imagegpt-small"
 _CONFIG_FOR_DOC = "ImageGPTConfig"
+
 
 def dtype_to_min(dtype):
     if dtype == ms.float16:
@@ -44,7 +39,6 @@ def dtype_to_min(dtype):
         return ms.tensor(float.fromhex("-0x1.fe00000000000p+127"), dtype=ms.bfloat16)
     else:
         raise ValueError(f"Only support get minimum value of (float16, ), but got {dtype}")
-
 
 
 class ImageGPTLayerNorm(nn.Cell):
@@ -177,7 +171,7 @@ class ImageGPTAttention(nn.Cell):
         q, k = query.reshape(-1, q_seq_len, dk), mint.transpose(key, -1, -2).reshape(-1, dk, k_seq_len)
         attn_weights = mint.baddbmm(attn_weights, q.float(), k.float(), beta=0, alpha=scale_factor)
         attn_weights = attn_weights.reshape(bsz, num_heads, q_seq_len, k_seq_len)
-        
+
         if not self.is_cross_attention:
             # if only "normal" attention layer implements causal mask
             query_length, key_length = query.shape[-2], key.shape[-2]
@@ -224,7 +218,7 @@ class ImageGPTAttention(nn.Cell):
         tensor = tensor.permute(0, 2, 1, 3).contiguous()
         new_shape = tensor.shape[:-2] + (num_heads * attn_head_size,)
         return tensor.view(new_shape)
-            
+
     def construct(
         self,
         hidden_states: ms.Tensor,
@@ -481,6 +475,7 @@ IMAGEGPT_INPUTS_DOCSTRING = r"""
             Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
 """
 
+
 # @add_start_docstrings(
 #     "The bare ImageGPT Model transformer outputting raw hidden-states without any specific head on top.",
 #     IMAGEGPT_START_DOCSTRING,
@@ -607,8 +602,8 @@ class ImageGPTModel(ImageGPTPreTrainedModel):
 
         if token_type_ids is not None:
             token_type_ids = token_type_ids.view(-1, input_shape[-1])
-        
-        #TODO: delete this
+
+        # TODO: delete this
         # if position_ids is not None:
         #     position_ids = position_ids.view(-1, input_shape[-1])
 
@@ -728,7 +723,11 @@ class ImageGPTModel(ImageGPTPreTrainedModel):
             all_hidden_states = all_hidden_states + (hidden_states,)
 
         if not return_dict:
-            return tuple(v for v in [hidden_states, presents, all_hidden_states, all_self_attentions, all_cross_attentions] if v is not None)
+            return tuple(
+                v
+                for v in [hidden_states, presents, all_hidden_states, all_self_attentions, all_cross_attentions]
+                if v is not None
+            )
 
         return BaseModelOutputWithPastAndCrossAttentions(
             last_hidden_state=hidden_states,
@@ -751,6 +750,7 @@ class ImageGPTForCausalImageModeling(ImageGPTPreTrainedModel, GenerationMixin):
     The ImageGPT Model transformer with a language modeling head on top (linear layer with weights tied to the input
     embeddings).
     """
+
     _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config: ImageGPTConfig):
@@ -889,17 +889,14 @@ class ImageGPTForCausalImageModeling(ImageGPTPreTrainedModel, GenerationMixin):
         )
 
     @staticmethod
-    def _reorder_cache(
-        past_key_values: Tuple[Tuple[ms.Tensor]], beam_idx: ms.Tensor
-    ) -> Tuple[Tuple[ms.Tensor]]:
+    def _reorder_cache(past_key_values: Tuple[Tuple[ms.Tensor]], beam_idx: ms.Tensor) -> Tuple[Tuple[ms.Tensor]]:
         """
         This function is used to re-order the `past_key_values` cache if [`~PreTrainedModel.beam_search`] or
         [`~PreTrainedModel.beam_sample`] is called. This is required to match `past_key_values` with the correct
         beam_idx at every generation step.
         """
         return tuple(
-            tuple(past_state.index_select(0, beam_idx) for past_state in layer_past)
-            for layer_past in past_key_values
+            tuple(past_state.index_select(0, beam_idx) for past_state in layer_past) for layer_past in past_key_values
         )
 
 
@@ -1036,8 +1033,9 @@ class ImageGPTForImageClassification(ImageGPTPreTrainedModel):
             past_key_values=transformer_outputs.past_key_values,
             hidden_states=transformer_outputs.hidden_states,
             attentions=transformer_outputs.attentions,
-        ) 
-    
+        )
+
+
 __all__ = [
     "ImageGPTForCausalImageModeling",
     "ImageGPTForImageClassification",

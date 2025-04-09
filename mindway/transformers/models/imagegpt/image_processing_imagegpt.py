@@ -3,7 +3,6 @@
 from typing import Dict, List, Optional, Union
 
 import numpy as np
-import mindspore as ms
 
 from ...image_processing_utils import BaseImageProcessor, BatchFeature, get_size_dict
 from ...image_transforms import rescale, resize, to_channel_dimension_format
@@ -19,7 +18,6 @@ from ...image_utils import (
     validate_preprocess_arguments,
 )
 from ...utils import TensorType, filter_out_non_signature_kwargs, is_vision_available, logging
-
 
 if is_vision_available():
     import PIL
@@ -278,11 +276,11 @@ class ImageGPTImageProcessor(BaseImageProcessor):
             images = list(images)
         else:
             images = [
-                to_channel_dimension_format(image, data_format, input_channel_dim=input_data_format)
-                for image in images
+                to_channel_dimension_format(image, data_format, input_channel_dim=input_data_format) for image in images
             ]
 
         data = {"input_ids": images}
         return BatchFeature(data=data, tensor_type=return_tensors)
+
 
 __all__ = ["ImageGPTImageProcessor"]
