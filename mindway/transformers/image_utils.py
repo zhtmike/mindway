@@ -53,7 +53,7 @@ if is_vision_available():
     if is_mindspore_available():
         from mindspore.dataset.vision import Inter as InterpolationMode
 
-        pil_torch_interpolation_mapping = {
+        pil_mindspore_interpolation_mapping = {
             PILImageResampling.NEAREST: InterpolationMode.NEAREST,
             PILImageResampling.BILINEAR: InterpolationMode.BILINEAR,
             PILImageResampling.BICUBIC: InterpolationMode.BICUBIC,
