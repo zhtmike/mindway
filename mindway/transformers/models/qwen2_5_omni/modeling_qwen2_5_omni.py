@@ -58,6 +58,7 @@ from .configuration_qwen2_5_omni import (
     Qwen2_5OmniToken2WavConfig,
     Qwen2_5OmniVisionEncoderConfig,
 )
+from ._conv import Conv1d, ConvTranspose1d, conv1d, conv_transpose1d
 from mindspore.common.initializer import initializer, Normal
 
 # from ...modeling_flash_attention_utils import flash_attn_supports_top_left_mask, is_flash_attn_available
@@ -96,7 +97,7 @@ class Qwen2_5OmniPreTrainedModel(MSPreTrainedModel):
         # inference and fine-tuning - so the proper init weights code has been removed
         std = self.config.initializer_range if hasattr(self.config, "initializer_range") else 0.02
 
-        if isinstance(module, (mint.nn.Linear, nn.Conv1d, mint.nn.Conv3d)):
+        if isinstance(module, (mint.nn.Linear, Conv1d, mint.nn.Conv3d)):
             weight = initializer(Normal(sigma=std, mean=0.0), shape=module.weight.shape)
             module.weight.set_data(weight)
             if module.bias is not None:
@@ -804,8 +805,8 @@ class Qwen2_5OmniAudioEncoder(Qwen2_5OmniPreTrainedModel):
         self.max_source_positions = config.max_source_positions
         self.embed_scale = math.sqrt(embed_dim) if config.scale_embedding else 1.0
         self.n_window = config.n_window
-        self.conv1 = nn.Conv1d(self.num_mel_bins, embed_dim, kernel_size=3, padding=1, pad_mode="pad", has_bias=True)
-        self.conv2 = nn.Conv1d(embed_dim, embed_dim, kernel_size=3, stride=2, padding=1, pad_mode="pad", has_bias=True)
+        self.conv1 = Conv1d(self.num_mel_bins, embed_dim, kernel_size=3, padding=1)
+        self.conv2 = Conv1d(embed_dim, embed_dim, kernel_size=3, stride=2, padding=1)
         self.positional_embedding = SinusoidsPositionEmbedding(self.max_source_positions, embed_dim)
         self.audio_bos_eos_token = mint.nn.Embedding(2, config.output_dim)
         self.layers = nn.CellList([Qwen2_5OmniAudioEncoderLayer(config) for _ in range(config.encoder_layers)])
@@ -3159,7 +3160,7 @@ class TimeDelayNetBlock(nn.Cell):
         dilation,
     ):
         super().__init__()
-        self.conv = nn.Conv1d( # TODO: need double check
+        self.conv = Conv1d(
             in_channels=in_channels,
             out_channels=out_channels,
             kernel_size=kernel_size,
@@ -3211,15 +3212,16 @@ class SqueezeExcitationBlock(nn.Cell):
     def __init__(self, in_channels, se_channels, out_channels):
         super().__init__()
 
-        self.conv1 = nn.Conv1d(
+        self.conv1 = Conv1d(
             in_channels=in_channels,
             out_channels=se_channels,
             kernel_size=1,
             padding="same",
             padding_mode="reflect",
         )
-        self.relu = mint.nn.ReLU(inplace=True)
-        self.conv2 = nn.Conv1d(
+        # TODO: ReLU use inplace
+        self.relu = mint.nn.ReLU()
+        self.conv2 = Conv1d(
             in_channels=se_channels,
             out_channels=out_channels,
             kernel_size=1,
@@ -3248,7 +3250,7 @@ class AttentiveStatisticsPooling(nn.Cell):
         self.eps = 1e-12
         self.tdnn = TimeDelayNetBlock(channels * 3, attention_channels, 1, 1)
         self.tanh = mint.nn.Tanh()
-        self.conv = nn.Conv1d(
+        self.conv = Conv1d(
             in_channels=attention_channels,
             out_channels=channels,
             kernel_size=1,
@@ -3419,7 +3421,7 @@ class ECAPA_TimeDelayNet(nn.Cell):
         )
 
         # Final linear transformation
-        self.fc = nn.Conv1d(
+        self.fc = Conv1d(
             in_channels=config.enc_channels[-1] * 2,
             out_channels=config.enc_dim,
             kernel_size=1,
@@ -3477,7 +3479,7 @@ class DiTInputEmbedding(nn.Cell):
         elif drop_audio_cond:  # cfg for cond audio
             condition_vector = mint.zeros_like(condition_vector)
             speaker_embedding = mint.zeros_like(speaker_embedding)
-        condition_vector = self.spk_encoder(condition_vector).unsqueeze(1).tile((1, hidden_states.size(1), 1))
+        condition_vector = self.spk_encoder(condition_vector).unsqueeze(1).tile((1, hidden_states.shape[1], 1))
         hidden_states = self.proj(mint.cat((hidden_states, condition_vector, code_embed, speaker_embedding), dim=-1))
 
         return hidden_states
@@ -3546,7 +3548,7 @@ class DiTMLP(nn.Cell):
         self.ff = nn.CellList(
             [
                 mint.nn.Linear(dim, inner_dim),
-                mint.nn.GELU(approximate="tanh"),
+                mint.nn.GELU(),  # TODO: approximate="tanh"
                 mint.nn.Dropout(dropout),
                 mint.nn.Linear(inner_dim, dim),
             ]
@@ -3611,7 +3613,6 @@ class DiTAttention(nn.Cell):
 
         self.to_out = nn.CellList([mint.nn.Linear(self.inner_dim, config.hidden_size), mint.nn.Dropout(config.dropout)])
 
-        self.attention_interface
         if self._attn_implementation == "flash_attention_2":
             self.attention_interface = MSFlashAttention(
                 head_dim=config.head_dim,
@@ -3654,7 +3655,7 @@ class DiTAttention(nn.Cell):
             query,
             key,
             value,
-            attention_mask=attention_mask,
+            attn_mask=attention_mask,
             # is_causal=False,
         )
 
@@ -3719,8 +3720,7 @@ class DiTDecoderLayer(nn.Cell):
         attn_output = self.attn(
             hidden_states=norm,
             position_embeddings=position_embeddings,
-            attention_mask=(block_diff >= -float(self.look_backward_block))
-            & (block_diff <= float(self.look_ahead_block)),
+            attention_mask=mint.logical_and(block_diff >= -float(self.look_backward_block), block_diff <= float(self.look_ahead_block)),
         )
 
         # process attention output for input x
@@ -3830,14 +3830,13 @@ class UpSample1d(nn.Cell):
         self.pad_left = self.pad * self.stride + (self.kernel_size - self.stride) // 2
         self.pad_right = self.pad * self.stride + (self.kernel_size - self.stride + 1) // 2
 
-        filter = kaiser_sinc_filter1d(cutoff=0.5 / ratio, half_width=0.6 / ratio, kernel_size=self.kernel_size)
-        self.register_buffer("filter", filter, persistent=False)
+        self.filter = kaiser_sinc_filter1d(cutoff=0.5 / ratio, half_width=0.6 / ratio, kernel_size=self.kernel_size)
 
     def construct(self, hidden_states):
         channels = hidden_states.shape[1]
 
         hidden_states = F.pad(hidden_states, (self.pad, self.pad), mode="replicate")
-        hidden_states = self.ratio * F.conv_transpose1d(
+        hidden_states = self.ratio * conv_transpose1d(
             hidden_states, self.filter.broadcast_to((channels, -1, -1)), stride=self.stride, groups=channels
         )
         hidden_states = hidden_states[..., self.pad_left : -self.pad_right]
@@ -3860,13 +3859,12 @@ class DownSample1d(nn.Cell):
         self.pad_left = kernel_size // 2 - int(self.even)
         self.pad_right = kernel_size // 2
         self.stride = ratio
-        filter = kaiser_sinc_filter1d(cutoff, half_width, kernel_size)
-        self.register_buffer("filter", filter, persistent=False)
+        self.filter = kaiser_sinc_filter1d(cutoff, half_width, kernel_size)
 
     def construct(self, hidden_states):
         channels = hidden_states.shape[1]
         hidden_states = F.pad(hidden_states, (self.pad_left, self.pad_right), mode="replicate")
-        out = F.conv1d(hidden_states, self.filter.broadcast_to((channels, -1, -1)), stride=self.stride, groups=channels)
+        out = conv1d(hidden_states, self.filter.broadcast_to((channels, -1, -1)), stride=self.stride, groups=channels)
         return out
 
 
@@ -3905,7 +3903,7 @@ class AMPBlock(nn.Cell):
 
         self.convs1 = nn.CellList(
             [
-                nn.Conv1d(
+                Conv1d(
                     channels,
                     channels,
                     kernel_size,
@@ -3913,7 +3911,7 @@ class AMPBlock(nn.Cell):
                     dilation=dilation[0],
                     padding=self._get_padding(kernel_size, dilation[0]),
                 ),
-                nn.Conv1d(
+                Conv1d(
                     channels,
                     channels,
                     kernel_size,
@@ -3921,7 +3919,7 @@ class AMPBlock(nn.Cell):
                     dilation=dilation[1],
                     padding=self._get_padding(kernel_size, dilation[1]),
                 ),
-                nn.Conv1d(
+                Conv1d(
                     channels,
                     channels,
                     kernel_size,
@@ -3934,7 +3932,7 @@ class AMPBlock(nn.Cell):
 
         self.convs2 = nn.CellList(
             [
-                nn.Conv1d(
+                Conv1d(
                     channels,
                     channels,
                     kernel_size,
@@ -3942,7 +3940,7 @@ class AMPBlock(nn.Cell):
                     dilation=1,
                     padding=self._get_padding(kernel_size, 1),
                 ),
-                nn.Conv1d(
+                Conv1d(
                     channels,
                     channels,
                     kernel_size,
@@ -3950,7 +3948,7 @@ class AMPBlock(nn.Cell):
                     dilation=1,
                     padding=self._get_padding(kernel_size, 1),
                 ),
-                nn.Conv1d(
+                Conv1d(
                     channels,
                     channels,
                     kernel_size,
@@ -3995,13 +3993,13 @@ class Qwen2_5OmniToken2WavBigVGANModel(Qwen2_5OmniPreTrainedModel):
         self.num_residual_blocks = len(config.resblock_kernel_sizes)
         self.num_upsample_layers = len(config.upsample_rates)
 
-        self.conv_pre = nn.Conv1d(config.mel_dim, config.upsample_initial_channel, 7, 1, padding=3)
+        self.conv_pre = Conv1d(config.mel_dim, config.upsample_initial_channel, 7, 1, padding=3)
 
         # Removing extra ModuleList breaks official state dict
         ups = [
             nn.CellList(
                 [
-                    nn.ConvTranspose1d(
+                    ConvTranspose1d(
                         config.upsample_initial_channel // (2**layer_idx),
                         config.upsample_initial_channel // (2 ** (layer_idx + 1)),
                         kernel_size,
@@ -4025,7 +4023,7 @@ class Qwen2_5OmniToken2WavBigVGANModel(Qwen2_5OmniPreTrainedModel):
         self.activation_post = TorchActivation1d(
             activation=SnakeBeta(config.upsample_initial_channel // (2**self.num_upsample_layers))
         )
-        self.conv_post = nn.Conv1d(
+        self.conv_post = Conv1d(
             config.upsample_initial_channel // (2**self.num_upsample_layers), 1, 7, 1, padding=3, bias=False
         )
 
@@ -4176,7 +4174,7 @@ class Qwen2_5OmniToken2WavDiTModel(Qwen2_5OmniPreTrainedModel):
     ):
         batch_size = hidden_states.shape[0]
         if time_step.ndim == 0:
-            time_step = time_step.tile((batch_size))
+            time_step = time_step.tile((batch_size, ))
 
         # Compute embeddings
         time_embedding = self.time_embed(time_step)

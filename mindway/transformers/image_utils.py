@@ -202,6 +202,37 @@ def make_list_of_images(images, expected_ndims: int = 3) -> List[ImageInput]:
     )
 
 
+def make_batched_videos(videos) -> VideoInput:
+    """
+    Ensure that the input is a list of videos.
+    Args:
+        videos (`VideoInput`):
+            Video or videos to turn into a list of videos.
+    Returns:
+        list: A list of videos.
+    """
+    if isinstance(videos, (list, tuple)) and isinstance(videos[0], (list, tuple)) and is_valid_image(videos[0][0]):
+        # case 1: nested batch of videos so we flatten it
+        if not is_pil_image(videos[0][0]) and videos[0][0].ndim == 4:
+            videos = [[video for batch_list in batched_videos for video in batch_list] for batched_videos in videos]
+        # case 2: list of videos represented as list of video frames
+        return videos
+
+    elif isinstance(videos, (list, tuple)) and is_valid_image(videos[0]):
+        if is_pil_image(videos[0]) or videos[0].ndim == 3:
+            return [videos]
+        elif videos[0].ndim == 4:
+            return [list(video) for video in videos]
+
+    elif is_valid_image(videos):
+        if is_pil_image(videos) or videos.ndim == 3:
+            return [[videos]]
+        elif videos.ndim == 4:
+            return [list(videos)]
+
+    raise ValueError(f"Could not make batched video from {videos}")
+
+
 def to_numpy_array(img) -> np.ndarray:
     if not is_valid_image(img):
         raise ValueError(f"Invalid image type: {type(img)}")
