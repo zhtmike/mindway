@@ -16,13 +16,14 @@
 
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 
-
 if TYPE_CHECKING:
     from ...modeling_outputs import DepthEstimatorOutput
 
 import numpy as np
 import PIL.Image
+
 from mindspore import mint
+
 from ...image_processing_utils import BaseImageProcessor, BatchFeature
 from ...image_transforms import resize, to_channel_dimension_format
 from ...image_utils import (
@@ -36,7 +37,7 @@ from ...image_utils import (
     valid_images,
     validate_preprocess_arguments,
 )
-from ...utils import TensorType, filter_out_non_signature_kwargs, logging, requires_backends
+from ...utils import TensorType, filter_out_non_signature_kwargs, logging
 
 logger = logging.get_logger(__name__)
 

@@ -16,22 +16,18 @@
 
 import math
 from typing import List, Optional, Tuple, Union
-from mindspore import mint, tensor
+
 import mindspore.nn as nn
+from mindspore import mint, tensor
 
 from ...activations import ACT2FN
+from ...mindspore_utils import find_pruneable_heads_and_indices, prune_linear_layer
 from ...modeling_outputs import BaseModelOutput, DepthEstimatorOutput
 from ...modeling_utils import MSPreTrainedModel
-from ...mindspore_utils import find_pruneable_heads_and_indices, prune_linear_layer
-from ...utils import (
-    # add_code_sample_docstrings,
-    # add_start_docstrings,
-    # add_start_docstrings_to_model_forward,
+from ...utils import (  # add_code_sample_docstrings,; add_start_docstrings,; add_start_docstrings_to_model_forward,; replace_return_docstrings,
     logging,
-    # replace_return_docstrings,
 )
 from .configuration_glpn import GLPNConfig
-
 
 logger = logging.get_logger(__name__)
 
@@ -543,13 +539,17 @@ class GLPNSelectiveFeatureFusion(nn.Cell):
         super().__init__()
 
         self.convolutional_layer1 = nn.SequentialCell(
-            mint.nn.Conv2d(in_channels=int(in_channel * 2), out_channels=in_channel, kernel_size=3, stride=1, padding=1),
+            mint.nn.Conv2d(
+                in_channels=int(in_channel * 2), out_channels=in_channel, kernel_size=3, stride=1, padding=1
+            ),
             mint.nn.BatchNorm2d(in_channel),
             mint.nn.ReLU(),
         )
 
         self.convolutional_layer2 = nn.SequentialCell(
-            mint.nn.Conv2d(in_channels=in_channel, out_channels=int(in_channel / 2), kernel_size=3, stride=1, padding=1),
+            mint.nn.Conv2d(
+                in_channels=in_channel, out_channels=int(in_channel / 2), kernel_size=3, stride=1, padding=1
+            ),
             mint.nn.BatchNorm2d(int(in_channel / 2)),
             mint.nn.ReLU(),
         )
@@ -568,9 +568,9 @@ class GLPNSelectiveFeatureFusion(nn.Cell):
         # apply sigmoid to get two-channel attention map
         attn = mint.sigmoid(features)
         # construct hybrid features by adding element-wise
-        hybrid_features = local_features * attn[:, 0, :, :].unsqueeze(1) + global_features * attn[
-            :, 1, :, :
-        ].unsqueeze(1)
+        hybrid_features = local_features * attn[:, 0, :, :].unsqueeze(1) + global_features * attn[:, 1, :, :].unsqueeze(
+            1
+        )
 
         return hybrid_features
 
@@ -579,20 +579,25 @@ class GLPNDecoderStage(nn.Cell):
     def __init__(self, in_channels, out_channels):
         super().__init__()
         should_skip = in_channels == out_channels
-        self.convolution = mint.nn.Conv2d(in_channels, out_channels, kernel_size=1) if not should_skip else nn.Identity()
+        self.convolution = (
+            mint.nn.Conv2d(in_channels, out_channels, kernel_size=1) if not should_skip else nn.Identity()
+        )
         self.fusion = GLPNSelectiveFeatureFusion(out_channels)
-        # TODO: bilinear can not be used with scale_factor in mindspore. 
+        # TODO: bilinear can not be used with scale_factor in mindspore.
         # self.upsample = mint.nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
 
     def construct(self, hidden_state, residual=None):
         hidden_state = self.convolution(hidden_state)
         if residual is not None:
             hidden_state = self.fusion(hidden_state, residual)
-        
+
         # hidden_state = self.upsample(hidden_state)
-        hidden_state = mint.nn.functional.interpolate(hidden_state, 
-                                                      size=(2 * hidden_state.shape[-2], 2 * hidden_state.shape[-1]), 
-                                                      mode="bilinear", align_corners=False)
+        hidden_state = mint.nn.functional.interpolate(
+            hidden_state,
+            size=(2 * hidden_state.shape[-2], 2 * hidden_state.shape[-1]),
+            mode="bilinear",
+            align_corners=False,
+        )
         return hidden_state
 
         hidden_state = self.upsample(hidden_state)
@@ -611,7 +616,7 @@ class GLPNDecoder(nn.Cell):
         )
         # don't fuse in first stage
         self.stages[0].fusion = None
-        # TODO: bilinear can not be used with scale_factor in mindspore. 
+        # TODO: bilinear can not be used with scale_factor in mindspore.
         # self.final_upsample = mint.nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
 
     def construct(self, hidden_states: List[tensor]) -> List[tensor]:
@@ -622,9 +627,12 @@ class GLPNDecoder(nn.Cell):
             stage_hidden_states.append(stage_hidden_state)
 
         # stage_hidden_states[-1] = self.final_upsample(stage_hidden_state)
-        stage_hidden_states[-1] = mint.nn.functional.interpolate(stage_hidden_state, 
-                                                      size=(2 * stage_hidden_state.shape[-2], 2 * stage_hidden_state.shape[-1]), 
-                                                      mode="bilinear", align_corners=False)
+        stage_hidden_states[-1] = mint.nn.functional.interpolate(
+            stage_hidden_state,
+            size=(2 * stage_hidden_state.shape[-2], 2 * stage_hidden_state.shape[-1]),
+            mode="bilinear",
+            align_corners=False,
+        )
         return stage_hidden_states
 
 

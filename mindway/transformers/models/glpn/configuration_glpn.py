@@ -15,10 +15,11 @@
 """GLPN model configuration"""
 
 from transformers.configuration_utils import PretrainedConfig
+
 from ...utils import logging
 
-
 logger = logging.get_logger(__name__)
+
 
 class GLPNConfig(PretrainedConfig):
     r"""
