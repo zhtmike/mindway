@@ -24,9 +24,9 @@ from typing import List, Optional, Union
 from mindspore import mint
 
 from ...feature_extraction_utils import BatchFeature
-from ...image_utils import ImageInput, VideoInput, make_batched_videos
-from ...processing_utils import ImagesKwargs, ProcessingKwargs, ProcessorMixin, Unpack, VideosKwargs
-from transformers.tokenization_utils_base import AudioInput, PreTokenizedInput, TextInput
+from transformers.image_utils import ImageInput, VideoInput, make_batched_videos # TODO?
+from transformers.processing_utils import ImagesKwargs, ProcessingKwargs, ProcessorMixin, Unpack, VideosKwargs # TODO?
+from transformers.tokenization_utils_base import AudioInput, PreTokenizedInput, TextInput # TODO?
 
 
 class Qwen2_5_OmniVideosKwargs(VideosKwargs):

@@ -74,7 +74,8 @@ from ...utils import is_flash_attn_2_available
 if is_flash_attn_2_available:
     # from mindspore.ops.operations.nn_ops import FlashAttentionScore as MSFlashAttention
     from ...mindspore_adapter import FlashAttention2 as MSFlashAttention
-from ...mindspore_adapter import scaled_dot_product_attention, dtype_to_min, _MIN_FP16
+from ...mindspore_adapter import scaled_dot_product_attention, dtype_to_min
+from ...mindspore_adapter.utils import _MIN_FP16
 _MAX_FP16 = ms.tensor(np.finfo(np.float16).max, dtype=ms.float16)
 
 logger = logging.get_logger(__name__)
@@ -751,9 +752,9 @@ class SinusoidsPositionEmbedding(nn.Cell):
         super().__init__()
         if channels % 2 != 0:
             raise ValueError("SinusoidsPositionEmbedding needs even channels input")
-        log_timescale_increment = np.log(max_timescale) / (channels // 2 - 1)
+        log_timescale_increment = ms.tensor(np.log(max_timescale) / (channels // 2 - 1))
         inv_timescales = mint.exp(-log_timescale_increment * mint.arange(channels // 2))
-        scaled_time = mint.arange(length)[:, np.newaxis] * inv_timescales[np.newaxis, :]
+        scaled_time = mint.arange(length)[:, None] * inv_timescales[None, :]
         # self.register_buffer(
         #     "positional_embedding",
         #     mint.cat([mint.sin(scaled_time), mint.cos(scaled_time)], dim=1),
@@ -803,8 +804,8 @@ class Qwen2_5OmniAudioEncoder(Qwen2_5OmniPreTrainedModel):
         self.max_source_positions = config.max_source_positions
         self.embed_scale = math.sqrt(embed_dim) if config.scale_embedding else 1.0
         self.n_window = config.n_window
-        self.conv1 = nn.Conv1d(self.num_mel_bins, embed_dim, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv1d(embed_dim, embed_dim, kernel_size=3, stride=2, padding=1)
+        self.conv1 = nn.Conv1d(self.num_mel_bins, embed_dim, kernel_size=3, padding=1, pad_mode="pad", has_bias=True)
+        self.conv2 = nn.Conv1d(embed_dim, embed_dim, kernel_size=3, stride=2, padding=1, pad_mode="pad", has_bias=True)
         self.positional_embedding = SinusoidsPositionEmbedding(self.max_source_positions, embed_dim)
         self.audio_bos_eos_token = mint.nn.Embedding(2, config.output_dim)
         self.layers = nn.CellList([Qwen2_5OmniAudioEncoderLayer(config) for _ in range(config.encoder_layers)])
@@ -1088,7 +1089,7 @@ class Qwen2RMSNorm(nn.Cell):
         Qwen2RMSNorm is equivalent to T5LayerNorm
         """
         super().__init__()
-        self.weight = nn.Parameter(mint.ones(hidden_size))
+        self.weight = Parameter(mint.ones(hidden_size))
         self.variance_epsilon = eps
 
     def construct(self, hidden_states):
@@ -1141,7 +1142,7 @@ class Qwen2_5_VisionPatchEmbed(nn.Cell):
         self.in_channels = in_channels
         self.embed_dim = embed_dim
 
-        kernel_size = [temporal_patch_size, patch_size, patch_size]
+        kernel_size = (temporal_patch_size, patch_size, patch_size)
         self.proj = mint.nn.Conv3d(in_channels, embed_dim, kernel_size=kernel_size, stride=kernel_size, bias=False).to_float(ms.float16)
 
     def construct(self, hidden_states: ms.Tensor) -> ms.Tensor:
@@ -2282,18 +2283,15 @@ class Qwen2_5OmniThinkerForConditionalGeneration(Qwen2_5OmniPreTrainedModelForCo
 
     def __init__(self, config: Qwen2_5OmniThinkerConfig):
         super().__init__(config)
-        self.audio_tower = Qwen2_5OmniAudioEncoder._from_config(
-            config.audio_config, attn_implementation=config._attn_implementation
-        )
+        config.audio_config.attn_implementation = config._attn_implementation
+        self.audio_tower = Qwen2_5OmniAudioEncoder(config.audio_config)
 
-        self.visual = Qwen2_5OmniVisionEncoder._from_config(
-            config.vision_config, attn_implementation=config._attn_implementation
-        )
+        config.vision_config.attn_implementation = config._attn_implementation
+        self.visual = Qwen2_5OmniVisionEncoder(config.vision_config)
 
         self.vocab_size = config.text_config.vocab_size
-        self.model = Qwen2_5OmniThinkerTextModel._from_config(
-            config.text_config, attn_implementation=config._attn_implementation
-        )
+        config.text_config.attn_implementation = config._attn_implementation
+        self.model = Qwen2_5OmniThinkerTextModel(config.text_config)
         self.lm_head = mint.nn.Linear(config.text_config.hidden_size, config.text_config.vocab_size, bias=False)
         self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
         self.spatial_merge_size = config.vision_config.spatial_merge_size
@@ -4295,12 +4293,10 @@ class Qwen2_5OmniToken2WavModel(Qwen2_5OmniPreTrainedModel):
                 "Qwen2_5OmniToken2WavModel does not support eager attention implementation, fall back to sdpa"
             )
             attn_impl = "sdpa"
-        self.code2wav_dit_model = Qwen2_5OmniToken2WavDiTModel._from_config(
-            config.dit_config, attn_implementation=attn_impl
-        )
-        self.code2wav_bigvgan_model = Qwen2_5OmniToken2WavBigVGANModel._from_config(
-            config.bigvgan_config, attn_implementation=attn_impl
-        )
+        config.dit_config.attn_implementation = attn_impl
+        self.code2wav_dit_model = Qwen2_5OmniToken2WavDiTModel(config.dit_config)
+        config.bigvgan_config.attn_implementation=attn_impl
+        self.code2wav_bigvgan_model = Qwen2_5OmniToken2WavBigVGANModel(config.bigvgan_config)
 
     def construct(
         self,
@@ -4393,7 +4389,7 @@ class Qwen2_5OmniForConditionalGeneration(Qwen2_5OmniPreTrainedModel, Generation
         token=None,
         revision="main",
         use_safetensors=None,
-        weights_only=True,
+        # weights_only=True,
         **kwargs,
     ):
         model = super().from_pretrained(
@@ -4407,7 +4403,7 @@ class Qwen2_5OmniForConditionalGeneration(Qwen2_5OmniPreTrainedModel, Generation
             token=token,
             revision=revision,
             use_safetensors=use_safetensors,
-            weights_only=weights_only,
+            # weights_only=weights_only, # TODO
             **kwargs,
         )
         spk_path = cached_file(
