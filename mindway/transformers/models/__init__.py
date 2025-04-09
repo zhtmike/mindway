@@ -10,6 +10,7 @@ from . import (
     gemma2,
     glm,
     gpt2,
+    ijepa,
     llama,
     llava,
     phi3,
