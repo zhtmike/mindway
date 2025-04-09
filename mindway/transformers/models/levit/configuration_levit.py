@@ -15,8 +15,8 @@
 """LeViT model configuration"""
 
 from transformers.configuration_utils import PretrainedConfig
-from ...utils import logging
 
+from ...utils import logging
 
 logger = logging.get_logger(__name__)
 
@@ -116,7 +116,6 @@ class LevitConfig(PretrainedConfig):
             ["Subsample", key_dim[0], hidden_sizes[0] // key_dim[0], 4, 2, 2],
             ["Subsample", key_dim[0], hidden_sizes[1] // key_dim[0], 4, 2, 2],
         ]
-
 
 
 __all__ = ["LevitConfig"]

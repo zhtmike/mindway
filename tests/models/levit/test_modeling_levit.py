@@ -1,22 +1,19 @@
-import inspect
 import logging
+
 import numpy as np
 import pytest
 import torch
-from transformers import LevitConfig 
 
 import mindspore as ms
 
-from tests.modeling_test_utils import (
-    compute_diffs,
-    generalized_parse_args,
-    get_modules,
-)
+from tests.modeling_test_utils import compute_diffs, generalized_parse_args, get_modules
+
 # -------------------------------------------------------------
 from tests.models.modeling_common import floats_numpy, ids_numpy
+from transformers import LevitConfig
 
 DTYPE_AND_THRESHOLDS = {"fp32": 5e-4}
-MODES = [1] 
+MODES = [1]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -42,7 +39,7 @@ class LevitModelTester:
         initializer_range=0.02,
         is_training=True,
         use_labels=True,
-        num_labels=2, 
+        num_labels=2,
     ):
         self.batch_size = batch_size
         self.image_size = image_size
@@ -67,7 +64,6 @@ class LevitModelTester:
         self.use_labels = use_labels
         self.num_labels = num_labels
         self.initializer_range = initializer_range
-
 
     def prepare_config_and_inputs(self):
         # Generate pixel values (B, C, H, W) as numpy float arrays
@@ -108,39 +104,39 @@ config, pixel_values, labels = model_tester.prepare_config_and_inputs()
 
 LEVIT_CASES = [
     [
-        "LevitModel",                          
-        "transformers.LevitModel",             
-        "mindway.transformers.LevitModel",     
-        (config,),                             
-        {},                                    
-        (pixel_values,),                      
-        {},                                    
-        {                                      
-            "last_hidden_state": "last_hidden_state",            
+        "LevitModel",
+        "transformers.LevitModel",
+        "mindway.transformers.LevitModel",
+        (config,),
+        {},
+        (pixel_values,),
+        {},
+        {
+            "last_hidden_state": "last_hidden_state",
         },
     ],
     [
         "LevitForImageClassification",
         "transformers.LevitForImageClassification",
         "mindway.transformers.LevitForImageClassification",
-        (config,),                           
+        (config,),
         {},
-        (pixel_values,),                       
-        {},                                    
-        {                                     
-            "logits": "logits",   
+        (pixel_values,),
+        {},
+        {
+            "logits": "logits",
         },
     ],
     [
         "LevitForImageClassificationWithTeacher",
         "transformers.LevitForImageClassificationWithTeacher",
         "mindway.transformers.LevitForImageClassificationWithTeacher",
-        (config,),                           
+        (config,),
         {},
-        (pixel_values,),                       
-        {},                                    
-        {                                     
-            "logits": "logits",   
+        (pixel_values,),
+        {},
+        {
+            "logits": "logits",
         },
     ],
 ]
@@ -149,13 +145,19 @@ LEVIT_CASES = [
 @pytest.mark.parametrize(
     "name,pt_module,ms_module,init_args,init_kwargs,inputs_args,inputs_kwargs,outputs_map,dtype,mode",
     [
-        case + [dtype,] + [mode,] 
+        case
+        + [
+            dtype,
+        ]
+        + [
+            mode,
+        ]
         for case in LEVIT_CASES
         for dtype in DTYPE_AND_THRESHOLDS.keys()
         for mode in MODES
     ],
 )
-def test_levit_modules_comparison( 
+def test_levit_modules_comparison(
     name,
     pt_module,
     ms_module,
@@ -183,7 +185,7 @@ def test_levit_modules_comparison(
         pt_dtype, ms_dtype, *inputs_args, **inputs_kwargs
     )
 
-    pt_model.eval() 
+    pt_model.eval()
     with torch.no_grad():
         pt_outputs = pt_model(*pt_inputs_args, **pt_inputs_kwargs)
 
@@ -195,17 +197,14 @@ def test_levit_modules_comparison(
     ms_outputs_to_compare = []
 
     for pt_key, ms_key in outputs_map.items():
-        try:
-            pt_output = getattr(pt_outputs, pt_key)
-        except AttributeError:
-                raise AttributeError(f"Output key '{pt_key}' not found in PyTorch output object {type(pt_outputs)}.")
+        if pt_key not in pt_outputs.__dict__:
+            raise AttributeError(f"Output key '{pt_key}' not in PyTorch output object {type(pt_outputs)}.")
+        if ms_key not in ms_outputs.__dict__:
+            raise IndexError(f"Output index {ms_key} not in MindSpore output object {type(ms_outputs)}.")
 
-        try:
-            ms_output = getattr(ms_outputs, ms_key)
-        except IndexError:
-            raise IndexError(f"Output index {ms_key} not found in PyTorch output object {type(ms_outputs)}.")
+        pt_output = getattr(pt_outputs, pt_key)
+        ms_output = getattr(ms_outputs, ms_key)
 
-        
         pt_outputs_to_compare.append(pt_output)
         ms_outputs_to_compare.append(ms_output)
 

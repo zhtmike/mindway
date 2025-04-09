@@ -19,11 +19,7 @@ from typing import Dict, Iterable, Optional, Union
 import numpy as np
 
 from ...image_processing_utils import BaseImageProcessor, BatchFeature, get_size_dict
-from ...image_transforms import (
-    get_resize_output_image_size,
-    resize,
-    to_channel_dimension_format,
-)
+from ...image_transforms import get_resize_output_image_size, resize, to_channel_dimension_format
 from ...image_utils import (
     IMAGENET_DEFAULT_MEAN,
     IMAGENET_DEFAULT_STD,
@@ -38,7 +34,6 @@ from ...image_utils import (
     validate_preprocess_arguments,
 )
 from ...utils import TensorType, filter_out_non_signature_kwargs, logging
-
 
 logger = logging.get_logger(__name__)
 

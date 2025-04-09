@@ -19,7 +19,8 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
 import mindspore as ms
-from mindspore import nn, mint
+from mindspore import mint, nn
+from mindspore.common.initializer import Constant, Normal, initializer
 
 from ...modeling_outputs import (
     BaseModelOutputWithNoAttention,
@@ -28,13 +29,9 @@ from ...modeling_outputs import (
     ModelOutput,
 )
 from ...modeling_utils import MSPreTrainedModel
-from ...utils import (
-    # add_code_sample_docstrings, 
-    # add_start_docstrings, 
-    # add_start_docstrings_to_model_forward, 
-    logging
+from ...utils import (  # add_code_sample_docstrings,; add_start_docstrings,; add_start_docstrings_to_model_forward,
+    logging,
 )
-from mindspore.common.initializer import Normal, Constant, initializer
 from .configuration_levit import LevitConfig
 
 logger = logging.get_logger(__name__)
@@ -82,9 +79,7 @@ class LevitConvEmbeddings(nn.Cell):
     LeViT Conv Embeddings with Batch Norm, used in the initial patch embedding layer.
     """
 
-    def __init__(
-        self, in_channels, out_channels, kernel_size, stride, padding, dilation=1, groups=1, bn_weight_init=1
-    ):
+    def __init__(self, in_channels, out_channels, kernel_size, stride, padding, dilation=1, groups=1, bn_weight_init=1):
         super().__init__()
         self.convolution = mint.nn.Conv2d(
             in_channels, out_channels, kernel_size, stride, padding, dilation=dilation, groups=groups, bias=False
@@ -258,7 +253,6 @@ class LevitAttentionSubsample(nn.Cell):
 
     def get_attention_biases(self):
         return self.attention_biases[:, self.attention_bias_idxs]
-        
 
     def construct(self, hidden_state):
         batch_size, seq_length, _ = hidden_state.shape
@@ -311,7 +305,7 @@ class LevitResidualLayer(nn.Cell):
         self.drop_rate = drop_rate
 
     def construct(self, hidden_state):
-        #TODO: modified it
+        # TODO: modified it
         # if self.training and self.drop_rate > 0:
         #     rnd = torch.rand(hidden_state.size(0), 1, 1, device=hidden_state.device)
         #     rnd = rnd.ge_(self.drop_rate).div(1 - self.drop_rate).detach()
@@ -468,12 +462,14 @@ class LevitPreTrainedModel(MSPreTrainedModel):
         """Initialize the weights"""
         std = self.config.initializer_range
         if isinstance(module, (mint.nn.Linear, mint.nn.Conv2d)):
-            module.weight.set_data(initializer(Normal(mean = 0.0, sigma = std), shape = module.weight.shape, dtype = module.weight.dtype))
+            module.weight.set_data(
+                initializer(Normal(mean=0.0, sigma=std), shape=module.weight.shape, dtype=module.weight.dtype)
+            )
             if module.bias is not None:
-                module.bias.set_data(initializer(Constant(0), shape = module.bias.shape, dtype = module.bias.dtype))
+                module.bias.set_data(initializer(Constant(0), shape=module.bias.shape, dtype=module.bias.dtype))
         elif isinstance(module, (mint.nn.BatchNorm1d, mint.nn.BatchNorm2d)):
-            module.weight.set_data(initializer(Constant(1), shape = module.weight.shape, dtype = module.weight.dtype))
-            module.bias.set_data(initializer(Constant(0), shape = module.bias.shape, dtype = module.bias.dtype))
+            module.weight.set_data(initializer(Constant(1), shape=module.weight.shape, dtype=module.weight.dtype))
+            module.bias.set_data(initializer(Constant(0), shape=module.bias.shape, dtype=module.bias.dtype))
 
 
 LEVIT_START_DOCSTRING = r"""
