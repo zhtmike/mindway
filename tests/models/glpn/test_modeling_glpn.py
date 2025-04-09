@@ -177,17 +177,14 @@ def test_glpn_modules_comparison(
     ms_outputs_to_compare = []
 
     for pt_key, ms_key in outputs_map.items():
-        try:
-            pt_output = getattr(pt_outputs, pt_key)
-        except AttributeError:
-                raise AttributeError(f"Output key '{pt_key}' not found in PyTorch output object {type(pt_outputs)}.")
+        if pt_key not in pt_outputs.__dict__:
+            raise AttributeError(f"Output key '{pt_key}' not in PyTorch output object {type(pt_outputs)}.")
+        if ms_key not in ms_outputs.__dict__:
+            raise IndexError(f"Output index {ms_key} not in MindSpore output object {type(ms_outputs)}.")
 
-        try:
-            ms_output = getattr(ms_outputs, ms_key)
-        except IndexError:
-            raise IndexError(f"Output index {ms_key} not found in PyTorch output object {type(ms_outputs)}.")
+        pt_output = getattr(pt_outputs, pt_key)
+        ms_output = getattr(ms_outputs, ms_key)
 
-        
         pt_outputs_to_compare.append(pt_output)
         ms_outputs_to_compare.append(ms_output)
 
