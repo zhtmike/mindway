@@ -1,22 +1,19 @@
-import inspect
 import logging
+
 import numpy as np
 import pytest
 import torch
-from transformers import GLPNConfig 
 
 import mindspore as ms
 
-from tests.modeling_test_utils import (
-    compute_diffs,
-    generalized_parse_args,
-    get_modules,
-)
+from tests.modeling_test_utils import compute_diffs, generalized_parse_args, get_modules
+
 # -------------------------------------------------------------
 from tests.models.modeling_common import floats_numpy, ids_numpy
+from transformers import GLPNConfig
 
 DTYPE_AND_THRESHOLDS = {"fp32": 5e-4}
-MODES = [1] 
+MODES = [1]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -66,7 +63,6 @@ class GLPNModelTester:
 
         self.type_sequence_label_size = type_sequence_label_size
 
-
     def prepare_config_and_inputs(self):
         # Generate pixel values (B, C, H, W) as numpy float arrays
         pixel_values = floats_numpy([self.batch_size, self.num_channels, self.image_size, self.image_size])
@@ -102,27 +98,27 @@ config, pixel_values, labels = model_tester.prepare_config_and_inputs()
 
 GLPN_CASES = [
     [
-        "GLPNModel",                          
-        "transformers.GLPNModel",             
-        "mindway.transformers.GLPNModel",     
-        (config,),                             
-        {},                                    
-        (pixel_values,),                      
-        {},                                    
-        {                                      
-            "last_hidden_state": "last_hidden_state",            
+        "GLPNModel",
+        "transformers.GLPNModel",
+        "mindway.transformers.GLPNModel",
+        (config,),
+        {},
+        (pixel_values,),
+        {},
+        {
+            "last_hidden_state": "last_hidden_state",
         },
     ],
     [
         "GLPNForDepthEstimation",
         "transformers.GLPNForDepthEstimation",
         "mindway.transformers.GLPNForDepthEstimation",
-        (config,),                           
+        (config,),
         {},
-        (pixel_values,),                       
-        {},                                    
-        {                                     
-            "predicted_depth": "predicted_depth",   
+        (pixel_values,),
+        {},
+        {
+            "predicted_depth": "predicted_depth",
         },
     ],
 ]
@@ -131,13 +127,19 @@ GLPN_CASES = [
 @pytest.mark.parametrize(
     "name,pt_module,ms_module,init_args,init_kwargs,inputs_args,inputs_kwargs,outputs_map,dtype,mode",
     [
-        case + [dtype,] + [mode,] 
+        case
+        + [
+            dtype,
+        ]
+        + [
+            mode,
+        ]
         for case in GLPN_CASES
         for dtype in DTYPE_AND_THRESHOLDS.keys()
         for mode in MODES
     ],
 )
-def test_glpn_modules_comparison( 
+def test_glpn_modules_comparison(
     name,
     pt_module,
     ms_module,
@@ -165,7 +167,7 @@ def test_glpn_modules_comparison(
         pt_dtype, ms_dtype, *inputs_args, **inputs_kwargs
     )
 
-    pt_model.eval() 
+    pt_model.eval()
     with torch.no_grad():
         pt_outputs = pt_model(*pt_inputs_args, **pt_inputs_kwargs)
 
@@ -200,4 +202,3 @@ def test_glpn_modules_comparison(
         f"Outputs differences {np.array(diffs).tolist()} exceeded threshold {threshold}"
     )
     logger.info(f"--- Test Passed: {name} | Mode: {mode} | DType: {dtype} ---")
-
