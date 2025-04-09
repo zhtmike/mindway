@@ -72,9 +72,10 @@ from .models.gpt2 import (
 )
 from .models.levit import (
     LevitModel,
-    LevitForImageClassificationWithTeacherOutput,
+    LevitForImageClassificationWithTeacher,
     LevitForImageClassification,
-    LevitPreTrainedModel
+    LevitPreTrainedModel,
+    LevitFeatureExtractor
 )
 from .models.llama import LlamaForCausalLM, LlamaForSequenceClassification, LlamaModel, LlamaPreTrainedModel
 from .models.llava import LlavaConfig, LlavaForConditionalGeneration

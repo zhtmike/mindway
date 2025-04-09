@@ -34,6 +34,7 @@ from ...utils import (
     # add_start_docstrings_to_model_forward, 
     logging
 )
+from mindspore.common.initializer import Normal, Constant, initializer
 from .configuration_levit import LevitConfig
 
 logger = logging.get_logger(__name__)
@@ -207,7 +208,7 @@ class LevitAttention(nn.Cell):
         value = value.permute(0, 2, 1, 3)
 
         attention = query @ mint.transpose(key, -2, -1) * self.scale + self.get_attention_biases()
-        attention = attention.softmax(dim=-1)
+        attention = attention.softmax(axis=-1)
         hidden_state = mint.transpose(attention @ value, 1, 2).reshape(batch_size, seq_length, self.out_dim_projection)
         hidden_state = self.projection(self.activation(hidden_state))
         return hidden_state
@@ -259,7 +260,7 @@ class LevitAttentionSubsample(nn.Cell):
         return self.attention_biases[:, self.attention_bias_idxs]
         
 
-    def forward(self, hidden_state):
+    def construct(self, hidden_state):
         batch_size, seq_length, _ = hidden_state.shape
         key, value = (
             self.keys_values(hidden_state)
@@ -275,7 +276,7 @@ class LevitAttentionSubsample(nn.Cell):
         )
 
         attention = query @ mint.transpose(key, -2, -1) * self.scale + self.get_attention_biases()
-        attention = attention.softmax(dim=-1)
+        attention = attention.softmax(axis=-1)
         hidden_state = mint.transpose(attention @ value, 1, 2).reshape(batch_size, -1, self.out_dim_projection)
         hidden_state = self.projection(self.activation(hidden_state))
         return hidden_state
@@ -465,13 +466,14 @@ class LevitPreTrainedModel(MSPreTrainedModel):
 
     def _init_weights(self, module):
         """Initialize the weights"""
+        std = self.config.initializer_range
         if isinstance(module, (mint.nn.Linear, mint.nn.Conv2d)):
-            module.weight.set_data(mint.normal(module.weight.shape, mean=0.0, std=self.config.initializer_range))
+            module.weight.set_data(initializer(Normal(mean = 0.0, sigma = std), shape = module.weight.shape, dtype = module.weight.dtype))
             if module.bias is not None:
-                module.bias.set_data(mint.zeros(module.bias.shape))
+                module.bias.set_data(initializer(Constant(0), shape = module.bias.shape, dtype = module.bias.dtype))
         elif isinstance(module, (mint.nn.BatchNorm1d, mint.nn.BatchNorm2d)):
-            module.bias.set_data(mint.zeros(module.bias.shape))
-            module.weight.set_data(mint.ones(module.weight.shape))
+            module.weight.set_data(initializer(Constant(1), shape = module.weight.shape, dtype = module.weight.dtype))
+            module.bias.set_data(initializer(Constant(0), shape = module.bias.shape, dtype = module.bias.dtype))
 
 
 LEVIT_START_DOCSTRING = r"""
@@ -520,7 +522,7 @@ class LevitModel(LevitPreTrainedModel):
     #     modality="vision",
     #     expected_output=_EXPECTED_OUTPUT_SHAPE,
     # )
-    def forward(
+    def construct(
         self,
         pixel_values: ms.Tensor = None,
         output_hidden_states: Optional[bool] = None,
