@@ -4363,7 +4363,7 @@ class Qwen2_5OmniForConditionalGeneration(Qwen2_5OmniPreTrainedModel, Generation
         self.has_talker = True
 
     def load_speakers(self, path):
-        for key, value in torch.load(path).items():
+        for key, value in ms.load_checkpoint(path).items():
             self.speaker_map[key] = value
         logger.info("Speaker {} loaded".format(list(self.speaker_map.keys())))
 
@@ -4406,7 +4406,7 @@ class Qwen2_5OmniForConditionalGeneration(Qwen2_5OmniPreTrainedModel, Generation
         )
         spk_path = cached_file(
             pretrained_model_name_or_path,
-            "spk_dict.pt",
+            "spk_dict.ckpt",
             subfolder=kwargs.pop("subfolder", None),
             cache_dir=kwargs.pop("cache_dir", None),
             force_download=kwargs.pop("force_download", False),
