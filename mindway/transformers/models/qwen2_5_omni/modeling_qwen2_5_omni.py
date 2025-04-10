@@ -278,9 +278,7 @@ class Qwen2_5OmniPreTrainedModelForConditionalGeneration(Qwen2_5OmniPreTrainedMo
             if attention_mask is None:
                 attention_mask = mint.ones_like(total_input_ids)
             position_ids = mint.ones(
-                3,
-                input_ids.shape[0],
-                input_ids.shape[1],
+                (3, input_ids.shape[0], input_ids.shape[1]),
                 dtype=input_ids.dtype,
             )
             image_idx, video_idx, audio_idx = 0, 0, 0
@@ -352,7 +350,7 @@ class Qwen2_5OmniPreTrainedModelForConditionalGeneration(Qwen2_5OmniPreTrainedMo
                         llm_pos_ids_list.append(mint.arange(bos_len).view((1, -1)).broadcast_to((3, -1)) + st_idx)
 
                         st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
-                        grid_t = image_grid_thw[image_idx][0]
+                        grid_t = image_grid_thw[image_idx][0].item()
                         grid_hs = image_grid_thw[:, 1]
                         grid_ws = image_grid_thw[:, 2]
                         t_index = (mint.arange(grid_t) * 1 * position_id_per_seconds).long()
@@ -381,7 +379,7 @@ class Qwen2_5OmniPreTrainedModelForConditionalGeneration(Qwen2_5OmniPreTrainedMo
                         llm_pos_ids_list.append(mint.arange(bos_len).view((1, -1)).broadcast_to((3, -1)) + st_idx)
 
                         st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
-                        grid_t = video_grid_thw[video_idx][0]
+                        grid_t = video_grid_thw[video_idx][0].item()
                         grid_hs = video_grid_thw[:, 1]
                         grid_ws = video_grid_thw[:, 2]
                         t_index = (
@@ -472,7 +470,7 @@ class Qwen2_5OmniPreTrainedModelForConditionalGeneration(Qwen2_5OmniPreTrainedMo
 
             return position_ids, mrope_position_deltas
         else:
-            position_ids = attention_mask.int().cumsum(-1) - 1
+            position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
             position_ids = position_ids.unsqueeze(0).broadcast_to((3, -1, -1))
             max_position_ids = position_ids.max(0, keepdim=False)[0].max(-1, keepdim=True)[0]
@@ -4363,8 +4361,21 @@ class Qwen2_5OmniForConditionalGeneration(Qwen2_5OmniPreTrainedModel, Generation
         self.has_talker = True
 
     def load_speakers(self, path):
-        for key, value in ms.load_checkpoint(path).items():
-            self.speaker_map[key] = value
+        np_dict = np.load(path, allow_pickle=True).item()
+        for key, value in np_dict.items():
+            if isinstance(value, dict):
+                value_ms_dict = {}
+                for k, v in value.items():
+                    if isinstance(v, np.ndarray):
+                        value_ms_dict[k] = ms.tensor(v)
+                    else:
+                        value_ms_dict[k] = v
+                self.speaker_map[key] = value_ms_dict
+            else:
+                if isinstance(v, np.ndarray):
+                    self.speaker_map[key] = ms.tensor(value)
+                else:
+                    self.speaker_map[key] = value
         logger.info("Speaker {} loaded".format(list(self.speaker_map.keys())))
 
     def disable_talker(self):
@@ -4406,7 +4417,7 @@ class Qwen2_5OmniForConditionalGeneration(Qwen2_5OmniPreTrainedModel, Generation
         )
         spk_path = cached_file(
             pretrained_model_name_or_path,
-            "spk_dict.ckpt",
+            "spk_dict.npy",
             subfolder=kwargs.pop("subfolder", None),
             cache_dir=kwargs.pop("cache_dir", None),
             force_download=kwargs.pop("force_download", False),
