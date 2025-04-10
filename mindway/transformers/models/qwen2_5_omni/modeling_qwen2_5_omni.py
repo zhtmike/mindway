@@ -2157,7 +2157,7 @@ class Qwen2_5OmniThinkerTextModel(Qwen2_5OmniPreTrainedModel):
             # In this case we assume that the mask comes already in inverted form and requires no inversion or slicing.
             causal_mask = attention_mask
         else:
-            min_dtype = dtype_to_min(dtype)
+            min_dtype = dtype_to_min(dtype).item()
             causal_mask = mint.full(
                 (sequence_length, target_length), fill_value=min_dtype, dtype=dtype
             )
@@ -2862,7 +2862,7 @@ class Qwen2_5OmniTalkerModel(Qwen2_5OmniPreTrainedModel):
             # In this case we assume that the mask comes already in inverted form and requires no inversion or slicing.
             causal_mask = attention_mask
         else:
-            min_dtype = dtype_to_min(dtype)
+            min_dtype = dtype_to_min(dtype).item()
             causal_mask = mint.full(
                 (sequence_length, target_length), fill_value=min_dtype, dtype=dtype
             )
