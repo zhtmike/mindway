@@ -32,7 +32,7 @@ from tests.modeling_test_utils import (
 from tests.models.modeling_common import ids_numpy
 
 DTYPE_AND_THRESHOLDS = {"fp32": 5e-4, "fp16": 5e-4, "bf16": 6e-3} # Thinker
-# DTYPE_AND_THRESHOLDS = {"fp32": 5e-2, "fp16": 5e-2, "bf16": 5e-2} # Talker
+# DTYPE_AND_THRESHOLDS = {"fp32": 5e-42, "fp16": 5e-4, "bf16": 7e-3} # Talker
 # MODES = [0, 1]
 MODES = [1]
 
@@ -76,7 +76,7 @@ class Qwen2_5_OmniModelTester:
         self.intermediate_size = intermediate_size
         self.max_position_embeddings = max_position_embeddings
         self.use_sliding_window = use_sliding_window
-        self.attn_implementation=attn_implementation,
+        self.attn_implementation=attn_implementation
         self.eos_token_id = eos_token_id
         self.rope_scaling = {
             "mrope_section": [
