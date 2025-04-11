@@ -5,9 +5,10 @@ import mindspore as ms
 from mindspore import mint, nn
 
 from ...activations import ACT2FN
+from ...mindspore_adapter import scaled_dot_product_attention
 from ...mindspore_utils import find_pruneable_heads_and_indices, prune_linear_layer
 from ...modeling_outputs import BaseModelOutput, BaseModelOutputWithPooling, ImageClassifierOutput
-from ...modeling_utils import ALL_ATTENTION_FUNCTIONS, MSPreTrainedModel
+from ...modeling_utils import MSPreTrainedModel
 from ...utils import (  # add_code_sample_docstrings,; add_start_docstrings,; add_start_docstrings_to_model_forward,
     logging,
     mindspore_int,
@@ -128,7 +129,7 @@ class IJepaEmbeddings(nn.Cell):
             seq_length = embeddings.shape[1]
             mask_tokens = self.mask_token.expand(batch_size, seq_length, -1)
             # replace the masked visual tokens by mask_tokens
-            mask = bool_masked_pos.unsqueeze(-1).astype(mask_tokens.dtype)
+            mask = bool_masked_pos.unsqueeze(-1).to(mask_tokens.dtype)
             embeddings = embeddings * (1.0 - mask) + mask_tokens * mask
 
         # add positional encoding to each token
@@ -176,7 +177,7 @@ class IJepaPreTrainedModel(MSPreTrainedModel):
     #         ).to(module.position_embeddings.dtype)
 
 
-def eager_attention_forward(
+def eager_attention_construct(
     module: nn.Cell,
     query: ms.Tensor,
     key: ms.Tensor,
@@ -190,7 +191,7 @@ def eager_attention_forward(
     attn_weights = mint.matmul(query, mint.transpose(key, -1, -2)) * scaling
 
     # Normalize the attention scores to probabilities.
-    attn_weights = mint.nn.functional.softmax(attn_weights, axis=-1, dtype=ms.float32).astype(query.dtype)
+    attn_weights = mint.nn.functional.softmax(attn_weights, axis=-1, dtype=ms.float32).to(query.dtype)
 
     # This is actually dropping out entire tokens to attend to, which might
     # seem a bit unusual, but is taken from the original Transformer paper.
@@ -201,9 +202,15 @@ def eager_attention_forward(
         attn_weights = attn_weights * attention_mask
 
     attn_output = mint.matmul(attn_weights, value)
-    attn_output = attn_output.transpose(1, 2).contiguous()
+    attn_output = attn_output.swapaxes(1, 2).contiguous()
 
     return attn_output, attn_weights
+
+
+ALL_ATTENTION_FUNCTIONS = {
+    "eager": eager_attention_construct,
+    "sdpa": scaled_dot_product_attention,
+}
 
 
 class IJepaSelfAttention(nn.Cell):
@@ -239,7 +246,7 @@ class IJepaSelfAttention(nn.Cell):
         value_layer = self.transpose_for_scores(self.value(hidden_states))
         query_layer = self.transpose_for_scores(self.query(hidden_states))
 
-        attention_interface: Callable = eager_attention_forward
+        attention_interface: Callable = eager_attention_construct
         if self.config._attn_implementation != "eager":
             if self.config._attn_implementation == "sdpa" and output_attentions:
                 logger.warning_once(
