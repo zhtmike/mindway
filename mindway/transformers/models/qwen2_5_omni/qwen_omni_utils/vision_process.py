@@ -273,7 +273,7 @@ def fetch_video(ele: dict, image_factor: int = IMAGE_FACTOR, return_video_sample
         video_reader_backend = get_video_reader_backend()
         video, sample_fps = VIDEO_READER_BACKENDS[video_reader_backend](ele)
 
-        nframes, _, height, width = video.shape
+        nframes, height, width, _ = video.shape
         min_pixels = ele.get("min_pixels", VIDEO_MIN_PIXELS)
         total_pixels = ele.get("total_pixels", VIDEO_TOTAL_PIXELS)
         max_pixels = max(min(VIDEO_MAX_PIXELS, total_pixels / nframes * FRAME_FACTOR), int(min_pixels * 1.05))

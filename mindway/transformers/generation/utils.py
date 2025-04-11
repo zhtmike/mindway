@@ -1169,8 +1169,7 @@ class GenerationMixin:
         if generation_config.suppress_tokens is not None:
             processors.append(
                 SuppressTokensLogitsProcessor(
-                    generation_config.suppress_tokens,
-                    device=device,
+                    generation_config.suppress_tokens
                 )
             )
         if generation_config.begin_suppress_tokens is not None:
