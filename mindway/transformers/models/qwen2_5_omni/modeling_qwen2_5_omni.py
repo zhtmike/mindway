@@ -172,11 +172,11 @@ class Qwen2_5OmniPreTrainedModelForConditionalGeneration(Qwen2_5OmniPreTrainedMo
         grid_ws: List[int],
     ):
         llm_pos_ids_list = []
-        llm_grid_h = grid_hs[vision_idx] // spatial_merge_size
-        llm_grid_w = grid_ws[vision_idx] // spatial_merge_size
+        llm_grid_h = grid_hs[vision_idx].item() // spatial_merge_size
+        llm_grid_w = grid_ws[vision_idx].item() // spatial_merge_size
         h_index = mint.arange(llm_grid_h).view((1, -1, 1)).broadcast_to((len(t_index), -1, llm_grid_w)).flatten(start_dim=0)
         w_index = mint.arange(llm_grid_w).view((1, 1, -1)).broadcast_to((len(t_index), llm_grid_h, -1)).flatten(start_dim=0)
-        t_index = ms.Tensor(t_index).view((-1, 1)).broadcast_to((-1, llm_grid_h * llm_grid_w)).flatten(start_dim=0).int()
+        t_index = ms.Tensor(t_index).view((-1, 1)).broadcast_to((-1, llm_grid_h * llm_grid_w)).flatten(start_dim=0).long()
         _llm_pos_ids = mint.stack([t_index, h_index, w_index])
         llm_pos_ids_list.append(_llm_pos_ids + start_idx)  # + 1 ) # 12.09 by malinhan
         llm_pos_ids = mint.cat(llm_pos_ids_list, dim=1)
@@ -327,7 +327,7 @@ class Qwen2_5OmniPreTrainedModelForConditionalGeneration(Qwen2_5OmniPreTrainedMo
                         llm_pos_ids_list.append(mint.arange(bos_len).view((1, -1)).broadcast_to((3, -1)) + st_idx)
 
                         st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
-                        audio_len = ((audio_seqlens[audio_idx] - 1) // 2 + 1 - 2) // 2 + 1
+                        audio_len = ((audio_seqlens[audio_idx].item() - 1) // 2 + 1 - 2) // 2 + 1
                         llm_pos_ids = mint.arange(audio_len).view((1, -1)).broadcast_to((3, -1)) + st_idx
                         llm_pos_ids_list.append(llm_pos_ids)
 
@@ -411,9 +411,9 @@ class Qwen2_5OmniPreTrainedModelForConditionalGeneration(Qwen2_5OmniPreTrainedMo
                         llm_pos_ids_list.append(mint.arange(bos_len).view((1, -1)).broadcast_to((3, -1)) + st_idx)
 
                         st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
-                        audio_len = ((audio_seqlens[audio_idx] - 1) // 2 + 1 - 2) // 2 + 1
+                        audio_len = ((audio_seqlens[audio_idx].item() - 1) // 2 + 1 - 2) // 2 + 1
                         audio_llm_pos_ids = mint.arange(audio_len).view((1, -1)).broadcast_to((3, -1)) + st_idx
-                        grid_t = video_grid_thw[video_idx][0]
+                        grid_t = video_grid_thw[video_idx][0].item()
                         grid_hs = video_grid_thw[:, 1]
                         grid_ws = video_grid_thw[:, 2]
 
@@ -460,9 +460,9 @@ class Qwen2_5OmniPreTrainedModelForConditionalGeneration(Qwen2_5OmniPreTrainedMo
                 if st < len(input_tokens):
                     st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
                     text_len = len(input_tokens) - st
-                    llm_pos_ids_list.append(mint.arange(text_len).view((1, -1)).broadcast_to((3, -1)) + st_idx)
+                    llm_pos_ids_list.append(mint.arange(text_len.item()).view((1, -1)).broadcast_to((3, -1)) + st_idx)
 
-                llm_positions = mint.cat(llm_pos_ids_list, dim=1).reshape(3, -1)
+                llm_positions = mint.cat(llm_pos_ids_list, dim=1).reshape(3, -1).to(position_ids.dtype)
 
                 position_ids[..., i, attention_mask[i] == 1] = llm_positions
                 mrope_position_deltas.append(llm_positions.max() + 1 - len(input_ids))
@@ -1237,7 +1237,7 @@ class Qwen2_5OmniVisionEncoder(Qwen2_5OmniPreTrainedModel):
             wpos_ids = wpos_ids.flatten(start_dim=0)
             pos_ids.append(mint.stack([hpos_ids, wpos_ids], dim=-1).tile((t, 1)))
         pos_ids = mint.cat(pos_ids, dim=0)
-        max_grid_size = grid_thw[:, 1:].max()
+        max_grid_size = grid_thw[:, 1:].max().item()
         rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
         rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(start_dim=1)
         return rotary_pos_emb
@@ -1281,7 +1281,7 @@ class Qwen2_5OmniVisionEncoder(Qwen2_5OmniPreTrainedModel):
             window_index.append(index_new + window_index_id)
             cu_seqlens_tmp = seqlens.cumsum(0) * self.spatial_merge_unit + cu_window_seqlens[-1]
             cu_window_seqlens.extend(cu_seqlens_tmp.tolist())
-            window_index_id += (grid_t * llm_grid_h * llm_grid_w).item()
+            window_index_id += grid_t * llm_grid_h * llm_grid_w
         window_index = mint.cat(window_index, dim=0)
 
         return window_index, cu_window_seqlens
@@ -4539,7 +4539,7 @@ class Qwen2_5OmniForConditionalGeneration(Qwen2_5OmniPreTrainedModel, Generation
             return thinker_result
 
         # 2. Generate speech tokens from talker module
-        thinker_generate_ids = thinker_result.sequences[:, input_ids.size(1) :]
+        thinker_generate_ids = thinker_result.sequences[:, input_ids.shape[1] :]
         thinker_token_embeds = [
             token_hidden_states[0] for token_hidden_states in thinker_result.hidden_states
         ]
