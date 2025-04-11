@@ -35,7 +35,7 @@ from ...activations import ACT2FN
 from ...cache_utils import Cache, DynamicCache, StaticCache # TODO: SlidingWindowCache
 from ...generation import GenerationMixin
 from ...modeling_attn_mask_utils import AttentionMaskConverter
-from ...modeling_outputs import BaseModelOutput, BaseModelOutputWithPast, ModelOutput
+from ...modeling_outputs import BaseModelOutput, BaseModelOutputWithPast, ModelOutput, CausalLMOutputWithPast
 from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS
 from ...modeling_utils import MSPreTrainedModel # ALL_ATTENTION_FUNCTIONS
 from transformers.utils import (
@@ -485,7 +485,7 @@ class Qwen2_5OmniPreTrainedModelForConditionalGeneration(Qwen2_5OmniPreTrainedMo
 
 
 @dataclass
-class Qwen2_5OmniThinkerCausalLMOutputWithPast(ModelOutput):
+class Qwen2_5OmniThinkerCausalLMOutputWithPast(CausalLMOutputWithPast):
     """
     Base class for Qwen2.5OmniThinker causal language model (or autoregressive) outputs.
 
@@ -2557,7 +2557,7 @@ class Qwen2_5OmniThinkerForConditionalGeneration(Qwen2_5OmniPreTrainedModelForCo
 
 
 @dataclass
-class Qwen2_5OmniTalkerCausalLMOutputWithPast(ModelOutput):
+class Qwen2_5OmniTalkerCausalLMOutputWithPast(CausalLMOutputWithPast):
     """
     Base class for Qwen2.5OmniTalker causal language model (or autoregressive) outputs.
 
