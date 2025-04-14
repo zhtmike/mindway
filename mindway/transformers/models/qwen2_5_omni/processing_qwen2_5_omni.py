@@ -226,16 +226,16 @@ class Qwen2_5OmniProcessor(ProcessorMixin):
                         )
                         video_index += 1
                     else:
-                        audio_t_index = mint.arange(audio_lengths[audio_index])
+                        audio_t_index = mint.arange(audio_lengths[audio_index].item())
                         video_t_index = (
-                            mint.arange(video_grid_thw[video_index][0])
-                            .view(-1, 1, 1)
-                            .expand(
-                                -1,
-                                video_grid_thw[video_index][1] // self.image_processor.merge_size,
-                                video_grid_thw[video_index][2] // self.image_processor.merge_size,
+                            mint.arange(video_grid_thw[video_index][0].item())
+                            .view((-1, 1, 1))
+                            .broadcast_to(
+                                (-1,
+                                video_grid_thw[video_index][1].item() // self.image_processor.merge_size,
+                                video_grid_thw[video_index][2].item() // self.image_processor.merge_size,)
                             )
-                            .flatten()
+                            .flatten(start_dim=0)
                             * videos_inputs["video_second_per_grid"][video_index]
                             * position_id_per_seconds
                         ).long()

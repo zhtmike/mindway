@@ -835,11 +835,11 @@ class Qwen2_5OmniAudioEncoder(Qwen2_5OmniPreTrainedModel):
         chunk_num = mint.ceil(feature_lens / (self.n_window * 2)).int()
 
         chunk_lengths = ms.tensor(
-            [self.n_window * 2] * chunk_num.sum(),
+            [self.n_window * 2] * chunk_num.sum().item(),
             dtype=ms.int32,
         )
         tail_chunk_index = F.pad(chunk_num, (1, 0), value=-1).cumsum(0)[1:]
-        chunk_lengths[tail_chunk_index] = feature_lens % (self.n_window * 2)
+        chunk_lengths[tail_chunk_index] = feature_lens.int() % (self.n_window * 2)
         chunk_lengths = mint.where(chunk_lengths == 0, self.n_window * 2, chunk_lengths)
 
         chunk_list = input_features.split(chunk_lengths.tolist(), dim=1)
@@ -855,7 +855,7 @@ class Qwen2_5OmniAudioEncoder(Qwen2_5OmniPreTrainedModel):
         hidden_states = padded_embed[padded_mask_after_cnn]
         cu_seqlens = mint.cat(
             (
-                mint.zeros(1,  dtype=ms.int32),
+                mint.zeros(1).long(),
                 padded_mask_after_cnn.sum(1).cumsum(0),
             )
         ).to(ms.int32)
@@ -891,7 +891,7 @@ class Qwen2_5OmniAudioEncoder(Qwen2_5OmniPreTrainedModel):
         Pads a sequence of tensors to their maximum length on indicated `padding_side`.
         Then prepares a mask so that pad tokens are not attended to.
         """
-        max_len = tensor_len.max()
+        max_len = tensor_len.max().item()
         dim = tensor_list[0].shape[0]
         padded_tensor = mint.full(
             size=(len(tensor_list), dim, max_len),
@@ -908,7 +908,7 @@ class Qwen2_5OmniAudioEncoder(Qwen2_5OmniPreTrainedModel):
             padded_tensor[i, :, :length] = tensor_list[i]
 
         feature_lens_after_cnn = (tensor_len - 1) // 2 + 1
-        max_len_after_cnn = feature_lens_after_cnn.max()
+        max_len_after_cnn = feature_lens_after_cnn.max().item()
         batch_mask_after_cnn = mint.zeros(
             (len(tensor_len), max_len_after_cnn),
             dtype=ms.int32,
