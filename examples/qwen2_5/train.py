@@ -119,7 +119,6 @@ def main(args):
     )
     data_generator = data_generator.batch(args.batch_size, drop_remainder=True, num_parallel_workers=2)
 
-    # prepare trainer
     optimizer = mint.optim.AdamW(model.trainable_params(), lr=args.lr, weight_decay=args.weight_decay)
 
     def forward_fn(*args, **kwargs):
@@ -130,6 +129,8 @@ def main(args):
 
     ds_iter = data_generator.create_dict_iterator(num_epochs=-1)
     ckpt_dir = os.path.join(args.output_path, "ckpt")
+    if not os.path.isdir(ckpt_dir):
+        os.mkdir(ckpt_dir)
 
     logger.info("Start training...")
     for epoch in range(1, args.epochs + 1):
