@@ -694,7 +694,7 @@ class Qwen2Model(Qwen2PreTrainedModel):
             # In this case we assume that the mask comes already in inverted form and requires no inversion or slicing.
             causal_mask = attention_mask
         else:
-            min_dtype = dtype_to_min(dtype)
+            min_dtype = dtype_to_min(dtype).item()
             causal_mask = mint.full((sequence_length, target_length), fill_value=min_dtype, dtype=dtype)
             diagonal_attend_mask = mint.arange(target_length) > cache_position.reshape(-1, 1)
             if config.sliding_window is not None:

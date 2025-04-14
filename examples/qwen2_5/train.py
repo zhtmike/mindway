@@ -8,6 +8,7 @@ from typing import Tuple
 from transformers import Qwen2Config
 
 import mindspore as ms
+import mindspore.mint as mint
 import mindspore.nn as nn
 import mindspore.ops as ops
 from mindspore.amp import auto_mixed_precision
@@ -16,14 +17,12 @@ from mindspore.dataset import GeneratorDataset
 
 # TODO: remove in future when mindway is ready for install
 __dir__ = os.path.dirname(os.path.abspath(__file__))
-mindone_lib_path = os.path.abspath(os.path.join(__dir__, "../../../"))
+mindone_lib_path = os.path.abspath(os.path.join(__dir__, "../../"))
 sys.path.insert(0, mindone_lib_path)
 
 
 from dataset import TextQADataset
 
-from mindway.trainers import create_optimizer
-from mindway.trainers.checkpoint import CheckpointManager
 from mindway.transformers import Qwen2ForCausalLM
 from mindway.utils.config import str2bool
 from mindway.utils.logger import set_logger
@@ -52,11 +51,8 @@ def parse_args():
         choices=["fp32", "bf16"],
         help="If it is not fp32, then train with auto mixed precision.",
     )
-    parser.add_argument(
-        "--optim", default="adamw_mint", type=str, choices=["adamw_mint", "came"], help="Optimizer name."
-    )
-    parser.add_argument("--learning_rate", default=1e-4, type=float, help="The learning rate.")
-    parser.add_argument("--warmup_steps", default=100, type=int, help="Warmup steps.")
+    parser.add_argument("--optim", default="adamw", type=str, choices=["adamw", "came"], help="Optimizer name.")
+    parser.add_argument("--lr", default=1e-4, type=float, help="The learning rate.")
     parser.add_argument("--weight_decay", default=0.1, type=float, help="Weight decay.")
     parser.add_argument("--epochs", default=200, type=int, help="Number of total training epochs.")
     parser.add_argument("--batch_size", default=4, type=int, help="Training batch size.")
@@ -124,36 +120,36 @@ def main(args):
     data_generator = data_generator.batch(args.batch_size, drop_remainder=True, num_parallel_workers=2)
 
     # prepare trainer
-    lr = nn.WarmUpLR(learning_rate=args.learning_rate, warmup_steps=args.warmup_steps)
-    optimizer = create_optimizer(model.trainable_params(), args.optim, lr=lr, group_strategy="not_grouping")
+    optimizer = mint.optim.AdamW(model.trainable_params(), lr=args.lr, weight_decay=args.weight_decay)
 
-    train_step_func = ms.value_and_grad(model, None, optimizer.parameters)
+    def forward_fn(*args, **kwargs):
+        return model(*args, **kwargs).loss
+
+    grad_fn = ms.value_and_grad(forward_fn, None, optimizer.parameters)
     reduce_func = nn.DistributedGradReducer(optimizer.parameters) if args.use_parallel else lambda x: x
 
     ds_iter = data_generator.create_dict_iterator(num_epochs=-1)
     ckpt_dir = os.path.join(args.output_path, "ckpt")
-    ckpt_manager = CheckpointManager(ckpt_dir, "latest_k", k=args.ckpt_max_keep)
 
     logger.info("Start training...")
     for epoch in range(1, args.epochs + 1):
         for step, data in enumerate(ds_iter):
             start_time_s = time.time()
-            loss, grads = train_step_func(**data)
+            loss, grads = grad_fn(**data)
             grads = reduce_func(grads)
             if args.clip_grad:
                 grads = ops.clip_by_global_norm(grads, clip_norm=args.clip_grad_value)
             optimizer(grads)
             step_time = time.time() - start_time_s
             logger.info(
-                "epoch %d, step %d, loss %.8f, lr %.7f, step time %.2fms",
+                "epoch %d, step %d, loss %.8f, step time %.3fms",
                 epoch,
                 step,
                 loss.item(),
-                optimizer.learning_rate(optimizer.global_step - 1)[0].item(),
                 step_time * 1000,
             )
-        ckpt_name = f"model-epoch-{epoch}.ckpt"
-        ckpt_manager.save(model, None, ckpt_name=ckpt_name, append_dict=None)
+        ckpt_name = os.path.join(ckpt_dir, "last.ckpt")
+        ms.save_checkpoint(model, ckpt_name)
 
 
 if __name__ == "__main__":
