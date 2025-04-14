@@ -22,6 +22,7 @@ sys.path.insert(0, mindone_lib_path)
 
 
 from dataset import TextQADataset
+from optimizer import Muon
 
 from mindway.transformers import Qwen2ForCausalLM
 from mindway.utils.config import str2bool
@@ -119,7 +120,10 @@ def main(args):
     )
     data_generator = data_generator.batch(args.batch_size, drop_remainder=True, num_parallel_workers=2)
 
-    optimizer = mint.optim.AdamW(model.trainable_params(), lr=args.lr, weight_decay=args.weight_decay)
+    if args.optim == "adamw":
+        optimizer = mint.optim.AdamW(model.trainable_params(), lr=args.lr, weight_decay=args.weight_decay)
+    else:
+        optimizer = Muon(model.trainable_params(), lr=args.lr, weight_decay=args.weight_decay)
 
     def forward_fn(*args, **kwargs):
         return model(*args, **kwargs).loss
