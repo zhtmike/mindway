@@ -26,13 +26,15 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Qwen2.5 Inference script", formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    parser.add_argument("--prompt", default="Give me a short introduction to large language model.")
-    parser.add_argument("--model_name", default="Qwen/Qwen2.5-0.5B-Instruct", help="Model name.")
+    parser.add_argument("-p", "--prompt", default="Give me a short introduction to large language model.")
+    parser.add_argument("-m", "--model_name", default="Qwen/Qwen2.5-0.5B-Instruct", help="Model name.")
+    parser.add_argument(
+        "-o", "--output_path", default="./output", help="Output directory to save the inference result."
+    )
 
     parser.add_argument("--seed", default=42, type=int, help="Training seed.")
     parser.add_argument("--mode", default=1, choices=[0, 1], help="Running in GRAPH_MODE(0) or PYNATIVE_MODE(1).")
     parser.add_argument("--jit_level", default="O0", choices=["O0", "O1"], help="Jit Level")
-    parser.add_argument("--output_path", default="./output", help="Output directory to save the inference result.")
     parser.add_argument("--use_parallel", default=False, type=str2bool, help="use parallel training.")
     parser.add_argument("--dtype", default="bf16", choices=["fp32", "fp16", "bf16"], help="Model dtype")
     args = parser.parse_args()

@@ -35,14 +35,15 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Qwen2.5 Training script", formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
+    parser.add_argument("-m", "--model_name", default="Qwen/Qwen2.5-0.5B-Instruct", help="Model name.")
+    parser.add_argument("-o", "--output_path", default="./output", help="Output directory to save the training result.")
+    parser.add_argument("-d", "--dataset_name", default="pubmed_qa", help="Dataset Name.")
+
     parser.add_argument("--seed", default=42, type=int, help="Training seed.")
     parser.add_argument("--mode", default=1, choices=[0, 1], help="Running in GRAPH_MODE(0) or PYNATIVE_MODE(1).")
     parser.add_argument("--jit_level", default="O1", choices=["O0", "O1"], help="Jit Level")
     parser.add_argument("--use_parallel", default=False, type=str2bool, help="use parallel training.")
-    parser.add_argument("--output_path", default="./output", help="Output directory to save the training result.")
-    parser.add_argument("--dataset_name", default="pubmed_qa", help="Dataset Name.")
     parser.add_argument("--max_token_length", default=1024, type=int, help="Maximum token length.")
-    parser.add_argument("--model_name", default="Qwen/Qwen2.5-0.5B-Instruct", help="Model name.")
     parser.add_argument(
         "--load_weight", default=True, type=str2bool, help="Load pretrained weight or random initialization."
     )
