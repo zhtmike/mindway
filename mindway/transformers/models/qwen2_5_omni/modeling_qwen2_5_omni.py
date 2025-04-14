@@ -2389,7 +2389,7 @@ class Qwen2_5OmniThinkerForConditionalGeneration(Qwen2_5OmniPreTrainedModelForCo
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if feature_attention_mask is not None:
-            audio_feature_lengths = mint.sum(feature_attention_mask, dim=1)
+            audio_feature_lengths = mint.sum(feature_attention_mask, dim=1).int()
             input_features = input_features.permute((0, 2, 1))[feature_attention_mask.bool()].permute((1, 0))
         else:
             audio_feature_lengths = None

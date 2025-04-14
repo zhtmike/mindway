@@ -1,14 +1,18 @@
-import soundfile as sf
+"""
+Text-Only Generation for Qwen2.5-Omni
+This script demonstrates how to use Qwen2.5-Omni to finish multimodal understainding tasks such as text Q&A, image, mutable video, audiable video understanding.
+"""
 import numpy as np
 import mindspore as ms
-from mindway.transformers import Qwen2_5OmniModel, Qwen2_5OmniProcessor
+from mindway.transformers import Qwen2_5OmniForConditionalGeneration
+from mindway.transformers.models.qwen2_5_omni import Qwen2_5OmniProcessor
 from mindway.transformers.models.qwen2_5_omni.qwen_omni_utils import process_mm_info
 
 # inference function
 def inference(medium_path, prompt, medium_type="image", use_audio_in_video=False):
     sys_prompt = "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech."
     messages = [
-        {"role": "system", "content": sys_prompt},
+        {"role": "system", "content": [{"type": "text", "text": sys_prompt}]},
         {"role": "user", "content": [
                 {"type": "text", "text": prompt},
             ]
@@ -25,14 +29,14 @@ def inference(medium_path, prompt, medium_type="image", use_audio_in_video=False
         medium = {
             "type": medium_type,
             "image": medium_path,
-            # "max_pixels": 360 * 420,
+            "max_pixels": 360 * 420,
         }
     if medium is not None:
         messages[1]["content"].append(medium)
 
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     audios, images, videos = process_mm_info(messages, use_audio_in_video=use_audio_in_video)
-    inputs = processor(text=text, audios=audios, images=images, videos=videos, return_tensors="np", padding=True, use_audio_in_video=use_audio_in_video)
+    inputs = processor(text=text, audio=audios, images=images, videos=videos, return_tensors="np", padding=True, use_audio_in_video=use_audio_in_video)
 
     # convert input to Tensor
     for key, value in inputs.items():  # by default input numpy array or list
@@ -54,7 +58,7 @@ def inference(medium_path, prompt, medium_type="image", use_audio_in_video=False
 
 # Load the model
 # We recommend enabling flash_attention_2 for better acceleration and memory saving.
-model = Qwen2_5OmniModel.from_pretrained(
+model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
     "Qwen/Qwen2.5-Omni-7B",
     use_safetensors=True,
     attn_implementation="flash_attention_2",

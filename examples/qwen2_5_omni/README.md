@@ -18,12 +18,25 @@ The abstract from the [Qwen2.5-Omni Technical Report](https://arxiv.org/abs/2503
 ### Installation
 ```
 cd examples/qwen2_5_omni
-pip install -r requirements.txt
+pip install -r examples/qwen2_5_omni/requirements.txt
 ```
 
-### Usage example
+### Usage examples
 
 `Qwen2.5-Omni-7B` chekpoint can be found on the [Huggingface Hub](https://huggingface.co/collections/Qwen/qwen25-omni-67de1e5f0f9464dc6314b36e).
+
+
+Here are some usage examples and scripts:
+|Example|	Description	|
+|---|---|
+|[Text-Only Generation](text_only_generation.py) | Q&A with Qwen2.5-Omni by text, image, video input and text-only output.
+|[Universal Audio Understanding](universal_audio_understanding.py)|	Speech recongnition, speech-to-text translation and audio analysis.	|
+|[Voice Chatting](voice_chatting.py)	| Chatting with Qwen2.5-Omni by voice input and output.	|
+|[Screen Recording Interaction](screen_recording_interaction.py)	| Get the information and content you want to know by asking questions in real time on the recording screen.	|
+|[Video Information Extracting](video_information_extracting.py)	| Obtaining information from the video stream. |
+|[Omni Chatting for Music](omni_chatting_for_music.py)	| Chat with Qwen2.5-Omni about music content in a audio and video stream.|
+| [Omni Chatting for Math](mni_chatting_for_math.py)	|Chat with Qwen2.5-Omni about math content in a audio and video stream.|
+|[Multi Round Omni Chatting](multi_round_omni_chatting.py)	|Conducted multiple rounds of audio and video dialogues with Qwen2.5-Omni to provide the most comprehensive ability demonstration.|
 
 ### Single Media inference
 
@@ -32,9 +45,10 @@ The model can accept text, images, audio and videos as input. Here's an example 
 ```python
 import soundfile as sf
 import mindspore as ms
-from mindway.transformers import Qwen2_5OmniModel, Qwen2_5OmniProcessor
+from mindway.transformers import Qwen2_5OmniForConditionalGeneration
+from mindway.transformers.models.qwen2_5_omni import Qwen2_5OmniProcessor
 
-model = Qwen2_5OmniModel.from_pretrained("Qwen/Qwen2.5-Omni-7B")
+model = Qwen2_5OmniForConditionalGeneration.from_pretrained("Qwen/Qwen2.5-Omni-7B")
 processor = Qwen2_5OmniProcessor.from_pretrained("Qwen/Qwen2.5-Omni-7B")
 
 conversation = [
@@ -70,10 +84,10 @@ inputs = processor.apply_chat_template(
 for key, value in inputs.items():
     if isinstance(value, np.ndarray):
         inputs[key] = ms.Tensor(value)
-    elif isinstance(value, list):
-        inputs[key] = ms.Tensor(value)
     if inputs[key].dtype == ms.int64:
         inputs[key] = inputs[key].to(ms.int32)
+    else:
+        inputs[key] = inputs[key].to(model.dtype)
 
 text_ids, audio = model.generate(**inputs, use_audio_in_video=True)
 text = processor.batch_decode(text_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
@@ -88,13 +102,14 @@ print(text)
 
 ### Text-only generation
 
-To generate only text output and save compute by not loading the audio generation model, we can set `enable_audio_output=False` when loading the model.
+To generate only text output and save compute by not loading the audio generation model, we can set `enable_audio_output=False` when loading the model. See more example usages in `text_only_generation.py`.
 
 ```python
 import mindspore as ms
-from mindway.transformers import Qwen2_5OmniModel, Qwen2_5OmniProcessor
+from mindway.transformers import Qwen2_5OmniForConditionalGeneration
+from mindway.transformers.models.qwen2_5_omni import Qwen2_5OmniProcessor
 
-model = Qwen2_5OmniModel.from_pretrained(
+model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
     "Qwen/Qwen2.5-Omni-7B",
     enable_audio_output=False,
 )
@@ -133,10 +148,10 @@ inputs = processor.apply_chat_template(
 for key, value in inputs.items():
     if isinstance(value, np.ndarray):
         inputs[key] = ms.Tensor(value)
-    elif isinstance(value, list):
-        inputs[key] = ms.Tensor(value)
     if inputs[key].dtype == ms.int64:
         inputs[key] = inputs[key].to(ms.int32)
+    else:
+        inputs[key] = inputs[key].to(model.dtype)
 
 text_ids = model.generate(**inputs, use_audio_in_video=True, return_audio=False)
 text = processor.batch_decode(text_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
@@ -156,7 +171,8 @@ The model can batch inputs composed of mixed samples of various types such as te
 ```python
 import soundfile as sf
 import mindspore as ms
-from transformers import Qwen2_5OmniForConditionalGeneration, Qwen2_5OmniProcessor
+from mindway.transformers import Qwen2_5OmniForConditionalGeneration
+from mindway.transformers.models.qwen2_5_omni import Qwen2_5OmniProcessor
 
 model = Qwen2_5OmniForConditionalGeneration.from_pretrained("Qwen/Qwen2.5-Omni-7B")
 processor = Qwen2_5OmniProcessor.from_pretrained("Qwen/Qwen2.5-Omni-7B")
@@ -246,10 +262,10 @@ inputs = processor.apply_chat_template(
 for key, value in inputs.items():
     if isinstance(value, np.ndarray):
         inputs[key] = ms.Tensor(value)
-    elif isinstance(value, list):
-        inputs[key] = ms.Tensor(value)
     if inputs[key].dtype == ms.int64:
         inputs[key] = inputs[key].to(ms.int32)
+    else:
+        inputs[key] = inputs[key].to(model.dtype)
 
 text_ids = model.generate(**inputs, use_audio_in_video=True)
 text = processor.batch_decode(text_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
@@ -326,59 +342,12 @@ model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
 )
 ```
 
+# Peformance
 
+## Inference
+Experiments are tested on ascend 910* with mindspore 2.5.0 pynative mode.
 
-## Qwen2_5OmniConfig
-
-
-
-## Qwen2_5OmniProcessor
-
-
-
-## Qwen2_5OmniForConditionalGeneration
-
-
-
-## Qwen2_5OmniPreTrainedModelForConditionalGeneration
-
-
-
-## Qwen2_5OmniThinkerConfig
-
-
-
-## Qwen2_5OmniThinkerForConditionalGeneration
-
-
-
-## Qwen2_5OmniThinkerTextModel
-
-
-
-## Qwen2_5OmniTalkerConfig
-
-
-
-## Qwen2_5OmniTalkerForConditionalGeneration
-
-
-
-## Qwen2_5OmniTalkerModel
-
-
-
-## Qwen2_5OmniToken2WavConfig
-
-
-
-## Qwen2_5OmniToken2WavModel
-
-
-
-## Qwen2_5OmniToken2WavDiTModel
-
-
-
-## Qwen2_5OmniToken2WavBigVGANModel
-
+|model| precision | task | resolution| FA | s/step | steps|
+|---|---|---|---|---|---|---|
+|Qwen2.5-Omni-7B| fp32 | text Q&A | N.A. | ON | 0.20 | 21 |
+|Qwen2.5-Omni-7B| fp32 | video VQA w/ audio| 20x280x504 | ON | 0.16 | 80 |

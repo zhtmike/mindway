@@ -3,3 +3,4 @@ av
 librosa
 soundfile
 transformers>=4.50.0
+jinja2

@@ -1,8 +1,7 @@
 """
-Video Information Extracting with Qwen2.5-Omni
-This script demonstrates how to use Qwen2.5-Omni to obtain information from the video stream.
+Screen Recording Interaction with Qwen2.5-Omni
+This script demonstrates how to use Qwen2.5-Omni to get the information and content you want to know by asking questions in real time on the recording screen.
 """
-
 import mindspore as ms
 import numpy as np
 from mindway.transformers import Qwen2_5OmniForConditionalGeneration
@@ -43,46 +42,46 @@ def inference(video_path, prompt, sys_prompt):
     text = processor.batch_decode(output, skip_special_tokens=True, clean_up_tokenization_spaces=False)
     return text
 
-
-# Load model and processor
-model_path = "Qwen/Qwen2.5-Omni-7B"
+# Load the model
+# We recommend enabling flash_attention_2 for better acceleration and memory saving.
 model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
-    model_path,
-    # mindspore_dtype=ms.bfloat16,
+    "Qwen/Qwen2.5-Omni-7B",
+    mindspore_dtype=ms.bfloat16,
+    use_safetensors=True,
     attn_implementation="flash_attention_2",
 )
-processor = Qwen2_5OmniProcessor.from_pretrained(model_path)
+processor = Qwen2_5OmniProcessor.from_pretrained("Qwen/Qwen2.5-Omni-7B")
 print("Finished loading model and processor.")
 
-# Question 1
-print("*"*100)
-print("***** Question 1 *****")
-video_path = "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2.5-Omni/shopping.mp4"
-prompt = "How many kind of drinks can you see in the video?"
 
-## Use a local model to inference.
+# Understanding
+print("*"*100)
+print("***** Understanding *****")
+video_path = "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2.5-Omni/screen.mp4"
+prompt = "What the browser is used in this video?"
 response = inference(video_path, prompt=prompt, sys_prompt="You are a helpful assistant.")
-print("***** Response 1 *****")
 print(response[0])
 
-
+# OCR
 print("*"*100)
-print("***** Question 2 *****")
-video_path = "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2.5-Omni/shopping.mp4"
-prompt = "How many bottles of drinks have I picked up?"
-
-## Use a local HuggingFace model to inference.
+print("***** OCR *****")
+video_path = "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2.5-Omni/screen.mp4"
+prompt = "Who is the authors of this paper?"
 response = inference(video_path, prompt=prompt, sys_prompt="You are a helpful assistant.")
-print("***** Response 2 *****")
 print(response[0])
 
-
+# Summarize
 print("*"*100)
-print("***** Question 3 *****")
-video_path = "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2.5-Omni/shopping.mp4"
-prompt = "How many milliliters are there in the bottle I picked up second time?"
-
-## Use a local HuggingFace model to inference.
+print("***** Summarize *****")
+video_path = "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2.5-Omni/screen.mp4"
+prompt = "Summarize this paper in short."
 response = inference(video_path, prompt=prompt, sys_prompt="You are a helpful assistant.")
-print("***** Response 3 *****")
+print(response[0])
+
+# Assistant
+print("*"*100)
+print("***** Assistant *****")
+video_path = "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2.5-Omni/screen.mp4"
+prompt = "Please trranslate the abstract of paper into Chinese."
+response = inference(video_path, prompt=prompt, sys_prompt="You are a helpful assistant.")
 print(response[0])
