@@ -3648,6 +3648,7 @@ class DiTAttention(nn.Cell):
         cos, sin = position_embeddings
         query[:, :1], key[:, :1] = apply_rotary_pos_emb(query[:, :1], key[:, :1], cos, sin)
 
+        # TODO: remove customized attention_interface
         # attention_interface = ALL_ATTENTION_FUNCTIONS[self._attn_implementation] # fa or sdpa
         attention_weights = self.attention_interface(
             query,
@@ -3656,6 +3657,7 @@ class DiTAttention(nn.Cell):
             attn_mask=attention_mask,
             # is_causal=False,
         )
+        attention_weights = attention_weights.transpose(1, 2)
 
         # mask. e.g. inference got a batch with different target durations, mask out the padding
         attention_weights = attention_weights.reshape(batch_size, -1, self.heads * head_dim)
