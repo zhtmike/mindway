@@ -18,7 +18,9 @@ if __name__ == "__main__":
     config = Qwen3Config(
         num_hidden_layers=1,
         use_cache=False,
-        attn_implementation="eager")
+        attn_implementation="eager",
+        sliding_window=None,
+    )
 
     model = Qwen3ForCausalLM(config)
     print("*" * 100)
@@ -27,7 +29,7 @@ if __name__ == "__main__":
     print("*" * 100)
 
     # TEST: process input
-    input_ids = ms.Tensor([10, 15, 41], ms.int32)
+    input_ids = ms.Tensor([[10, 15, 41]], ms.int32)
     # prompt = ["are you conscious?",]
     # input_ids = ms.Tensor(tokenizer(prompt).input_ids, ms.int32)
 
@@ -35,8 +37,12 @@ if __name__ == "__main__":
     input_kwargs["input_ids"] = input_ids
 
     output_ids = model.generate(**input_kwargs, max_new_tokens=5, do_sample=False)
-    output_ids = output_ids.asnumpy()
 
+    generated_ids = [
+        output_ids[len(input_ids):] for input_ids, output_ids in zip(input_ids, output_ids)
+    ]
+
+    print(f"generated id: {generated_ids}")
     # outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
 
 
