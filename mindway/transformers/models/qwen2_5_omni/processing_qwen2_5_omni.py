@@ -21,12 +21,13 @@ import logging
 import re
 from typing import List, Optional, Union
 
+from transformers.image_utils import ImageInput, VideoInput, make_batched_videos  # TODO?
+from transformers.processing_utils import ImagesKwargs, ProcessingKwargs, ProcessorMixin, Unpack, VideosKwargs  # TODO?
+from transformers.tokenization_utils_base import AudioInput, PreTokenizedInput, TextInput  # TODO?
+
 from mindspore import mint
 
 from ...feature_extraction_utils import BatchFeature
-from transformers.image_utils import ImageInput, VideoInput, make_batched_videos # TODO?
-from transformers.processing_utils import ImagesKwargs, ProcessingKwargs, ProcessorMixin, Unpack, VideosKwargs # TODO?
-from transformers.tokenization_utils_base import AudioInput, PreTokenizedInput, TextInput # TODO?
 
 
 class Qwen2_5_OmniVideosKwargs(VideosKwargs):
@@ -231,9 +232,11 @@ class Qwen2_5OmniProcessor(ProcessorMixin):
                             mint.arange(video_grid_thw[video_index][0].item())
                             .view((-1, 1, 1))
                             .broadcast_to(
-                                (-1,
-                                video_grid_thw[video_index][1].item() // self.image_processor.merge_size,
-                                video_grid_thw[video_index][2].item() // self.image_processor.merge_size,)
+                                (
+                                    -1,
+                                    video_grid_thw[video_index][1].item() // self.image_processor.merge_size,
+                                    video_grid_thw[video_index][2].item() // self.image_processor.merge_size,
+                                )
                             )
                             .flatten(start_dim=0)
                             * videos_inputs["video_second_per_grid"][video_index]

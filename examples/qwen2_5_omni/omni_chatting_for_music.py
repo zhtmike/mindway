@@ -3,31 +3,44 @@ Omni Chatting for Music with Qwen2.5-Omni
 This script demonstrates how to use Qwen2.5-Omni to chat about music content in a audio and video stream.
 """
 
-import soundfile as sf
 import numpy as np
+import soundfile as sf
+
 import mindspore as ms
+
 from mindway.transformers import Qwen2_5OmniForConditionalGeneration
 from mindway.transformers.models.qwen2_5_omni import Qwen2_5OmniProcessor
 from mindway.transformers.models.qwen2_5_omni.qwen_omni_utils import process_mm_info
+
 
 # inference function
 def inference(medium_path):
     sys_prompt = "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech."
     messages = [
         {"role": "system", "content": [{"type": "text", "text": sys_prompt}]},
-        {"role": "user", "content": [
+        {
+            "role": "user",
+            "content": [
                 {
                     "type": "video",
                     "video": medium_path,
                     "max_pixels": 360 * 420,
                 },
-            ]
+            ],
         },
     ]
 
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     audios, images, videos = process_mm_info(messages, use_audio_in_video=True)
-    inputs = processor(text=text, audio=audios, images=images, videos=videos, return_tensors="np", padding=True, use_audio_in_video=True)
+    inputs = processor(
+        text=text,
+        audio=audios,
+        images=images,
+        videos=videos,
+        return_tensors="np",
+        padding=True,
+        use_audio_in_video=True,
+    )
 
     # convert input to Tensor
     for key, value in inputs.items():  # by default input numpy array or list
@@ -49,7 +62,6 @@ def inference(medium_path):
 # We recommend enabling flash_attention_2 for better acceleration and memory saving.
 model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
     "Qwen/Qwen2.5-Omni-7B",
-    mindspore_dtype=ms.bfloat16,
     use_safetensors=True,
     attn_implementation="flash_attention_2",
 )
@@ -58,10 +70,10 @@ print("Finished loading model and processor.")
 
 
 # Omni Chatting
-print("*"*100)
+print("*" * 100)
 print("***** Omni Chatting for Music *****")
 video_path = "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2.5-Omni/music.mp4"
-response, audio  = inference(video_path)
+response, audio = inference(video_path)
 print(response[0])
 sf.write(
     "output_omni_chat_music.wav",

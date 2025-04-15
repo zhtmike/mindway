@@ -25,28 +25,28 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
-import mindspore as ms
-import mindspore.mint as mint
-import mindspore.mint.nn.functional as F
-from mindspore import nn, ops
-from mindspore import Parameter
-
-from ...activations import ACT2FN
-from ...cache_utils import Cache, DynamicCache, StaticCache # TODO: SlidingWindowCache
-from ...generation import GenerationMixin
-from ...modeling_attn_mask_utils import AttentionMaskConverter
-from ...modeling_outputs import BaseModelOutput, BaseModelOutputWithPast, ModelOutput, CausalLMOutputWithPast
-from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS
-from ...modeling_utils import MSPreTrainedModel # ALL_ATTENTION_FUNCTIONS
-from transformers.utils import (
+from transformers.utils import (  # is_flash_attn_2_available,; is_flash_attn_greater_or_equal_2_10,
     add_start_docstrings,
     add_start_docstrings_to_model_forward,
-    # is_flash_attn_2_available,
-    # is_flash_attn_greater_or_equal_2_10,
     logging,
     replace_return_docstrings,
 )
 from transformers.utils.hub import cached_file
+
+import mindspore as ms
+import mindspore.mint as mint
+import mindspore.mint.nn.functional as F
+from mindspore import Parameter, nn, ops
+from mindspore.common.initializer import Normal, initializer
+
+from ...activations import ACT2FN
+from ...cache_utils import Cache, DynamicCache, StaticCache  # TODO: SlidingWindowCache
+from ...generation import GenerationMixin
+from ...modeling_outputs import BaseModelOutput, BaseModelOutputWithPast, CausalLMOutputWithPast, ModelOutput
+from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS
+from ...modeling_utils import MSPreTrainedModel  # ALL_ATTENTION_FUNCTIONS
+from ...utils import is_flash_attn_2_available
+from ._conv import Conv1d, ConvTranspose1d, conv1d, conv_transpose1d
 from .configuration_qwen2_5_omni import (
     Qwen2_5OmniAudioEncoderConfig,
     Qwen2_5OmniBigVGANConfig,
@@ -58,8 +58,6 @@ from .configuration_qwen2_5_omni import (
     Qwen2_5OmniToken2WavConfig,
     Qwen2_5OmniVisionEncoderConfig,
 )
-from ._conv import Conv1d, ConvTranspose1d, conv1d, conv_transpose1d
-from mindspore.common.initializer import initializer, Normal
 
 # from ...modeling_flash_attention_utils import flash_attn_supports_top_left_mask, is_flash_attn_available
 # if is_flash_attn_2_available():
@@ -71,12 +69,13 @@ from mindspore.common.initializer import initializer, Normal
 # if is_flash_attn_available():
 #     from ...modeling_flash_attention_utils import _flash_attention_forward
 
-from ...utils import is_flash_attn_2_available
 if is_flash_attn_2_available:
     # from mindspore.ops.operations.nn_ops import FlashAttentionScore as MSFlashAttention
     from ...mindspore_adapter import FlashAttention2 as MSFlashAttention
-from ...mindspore_adapter import scaled_dot_product_attention, dtype_to_min
+
+from ...mindspore_adapter import dtype_to_min, scaled_dot_product_attention
 from ...mindspore_adapter.utils import _MIN_FP16
+
 _MAX_FP16 = ms.tensor(np.finfo(np.float16).max, dtype=ms.float16)
 
 logger = logging.get_logger(__name__)
@@ -88,9 +87,9 @@ class Qwen2_5OmniPreTrainedModel(MSPreTrainedModel):
     supports_gradient_checkpointing = True
     _skip_keys_device_placement = "past_key_values"
     _supports_flash_attn_2 = True
-    _supports_sdpa = False # not fully supported yet
-    _supports_cache_class = True # default: DynamicCache
-    _supports_static_cache = True # default: StaticCache
+    _supports_sdpa = False  # not fully supported yet
+    _supports_cache_class = True  # default: DynamicCache
+    _supports_static_cache = True  # default: StaticCache
 
     def _init_weights(self, module):
         # important: this ported version of Qwen2.5OmniThinker isn't meant for training from scratch - only
@@ -108,6 +107,7 @@ class Qwen2_5OmniPreTrainedModel(MSPreTrainedModel):
             module.weight.set_data(weight)
             if module.padding_idx is not None:
                 module.weight[module.padding_idx] = 0
+
 
 class Qwen2_5OmniPreTrainedModelForConditionalGeneration(Qwen2_5OmniPreTrainedModel):
     def _prepare_4d_causal_attention_mask_with_cache_position(
@@ -144,9 +144,7 @@ class Qwen2_5OmniPreTrainedModelForConditionalGeneration(Qwen2_5OmniPreTrainedMo
             # In this case we assume that the mask comes already in inverted form and requires no inversion or slicing.
             causal_mask = attention_mask
         else:
-            causal_mask = mint.full(
-                (sequence_length, target_length), fill_value=min_dtype, dtype=dtype
-            )
+            causal_mask = mint.full((sequence_length, target_length), fill_value=min_dtype, dtype=dtype)
             if sequence_length != 1:
                 causal_mask = mint.triu(causal_mask, diagonal=1)
             causal_mask *= mint.arange(target_length) > cache_position.reshape(-1, 1)
@@ -174,9 +172,15 @@ class Qwen2_5OmniPreTrainedModelForConditionalGeneration(Qwen2_5OmniPreTrainedMo
         llm_pos_ids_list = []
         llm_grid_h = grid_hs[vision_idx].item() // spatial_merge_size
         llm_grid_w = grid_ws[vision_idx].item() // spatial_merge_size
-        h_index = mint.arange(llm_grid_h).view((1, -1, 1)).broadcast_to((len(t_index), -1, llm_grid_w)).flatten(start_dim=0)
-        w_index = mint.arange(llm_grid_w).view((1, 1, -1)).broadcast_to((len(t_index), llm_grid_h, -1)).flatten(start_dim=0)
-        t_index = ms.Tensor(t_index).view((-1, 1)).broadcast_to((-1, llm_grid_h * llm_grid_w)).flatten(start_dim=0).long()
+        h_index = (
+            mint.arange(llm_grid_h).view((1, -1, 1)).broadcast_to((len(t_index), -1, llm_grid_w)).flatten(start_dim=0)
+        )
+        w_index = (
+            mint.arange(llm_grid_w).view((1, 1, -1)).broadcast_to((len(t_index), llm_grid_h, -1)).flatten(start_dim=0)
+        )
+        t_index = (
+            ms.Tensor(t_index).view((-1, 1)).broadcast_to((-1, llm_grid_h * llm_grid_w)).flatten(start_dim=0).long()
+        )
         _llm_pos_ids = mint.stack([t_index, h_index, w_index])
         llm_pos_ids_list.append(_llm_pos_ids + start_idx)  # + 1 ) # 12.09 by malinhan
         llm_pos_ids = mint.cat(llm_pos_ids_list, dim=1)
@@ -571,7 +575,7 @@ class Qwen2_5OmniAudioAttention(nn.Cell):
 
         attention_mask = mint.full(
             [1, seq_length, key_states.shape[1]],
-            dtype_to_min(query_states.dtype),
+            dtype_to_min(query_states.dtype).item(),
             dtype=query_states.dtype,
         )
         for i in range(1, len(cu_seqlens)):
@@ -636,11 +640,14 @@ class Qwen2_5OmniAudioFlashAttention2(Qwen2_5OmniAudioAttention):
         query_states = query_states.unsqueeze(0).swapaxes(1, 2)
         key_states = key_states.unsqueeze(0).swapaxes(1, 2)
         value_states = value_states.unsqueeze(0).swapaxes(1, 2)
-        attn_output = self.flash_attention(query_states, key_states, value_states).swapaxes(1, 2).unsqueeze(0) # BNSD => SND
+        attn_output = (
+            self.flash_attention(query_states, key_states, value_states).swapaxes(1, 2).unsqueeze(0)
+        )  # BNSD => SND
         attn_output = attn_output.reshape(seq_length, all_dim)
         attn_output = self.out_proj(attn_output)
 
         return attn_output
+
 
 # TODO
 class Qwen2_5OmniAudioSdpaAttention(Qwen2_5OmniAudioAttention):
@@ -657,9 +664,7 @@ class Qwen2_5OmniAudioSdpaAttention(Qwen2_5OmniAudioAttention):
         key_states = self.k_proj(hidden_states).reshape(seq_length, self.num_heads, -1)
         value_states = self.v_proj(hidden_states).reshape(seq_length, self.num_heads, -1)
 
-        attention_mask = mint.zeros(
-            [1, seq_length, key_states.shape[0]], dtype=ms.bool_
-        )
+        attention_mask = mint.zeros([1, seq_length, key_states.shape[0]], dtype=ms.bool_)
         for i in range(1, len(cu_seqlens)):
             attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = True
 
@@ -811,7 +816,7 @@ class Qwen2_5OmniAudioEncoder(Qwen2_5OmniPreTrainedModel):
         self.ln_post = mint.nn.LayerNorm(config.d_model)
         self.avg_pooler = nn.AvgPool1d(2, stride=2)
         self.proj = mint.nn.Linear(config.d_model, config.output_dim)
-        self.gradient_checkpointing = False #TODO
+        self.gradient_checkpointing = False  # TODO
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -960,9 +965,7 @@ class Qwen2_5OmniVisionAttention(nn.Cell):
         self.v = mint.nn.Linear(dim, dim, bias=True)
         self.proj = mint.nn.Linear(dim, dim)
 
-    def construct(
-        self, hidden_states: ms.Tensor, cu_seqlens: ms.Tensor, rotary_pos_emb: ms.Tensor = None
-    ) -> ms.Tensor:
+    def construct(self, hidden_states: ms.Tensor, cu_seqlens: ms.Tensor, rotary_pos_emb: ms.Tensor = None) -> ms.Tensor:
         seq_length = hidden_states.shape[0]
         q = self.q(hidden_states).reshape(seq_length, self.num_heads, -1)
         k = self.k(hidden_states).reshape(seq_length, self.num_heads, -1)
@@ -970,9 +973,7 @@ class Qwen2_5OmniVisionAttention(nn.Cell):
         q = apply_rotary_pos_emb_vision(q.unsqueeze(0), rotary_pos_emb).squeeze(0)
         k = apply_rotary_pos_emb_vision(k.unsqueeze(0), rotary_pos_emb).squeeze(0)
 
-        attention_mask = mint.full(
-            [1, seq_length, seq_length], dtype_to_min(q.dtype), dtype=q.dtype
-        )
+        attention_mask = mint.full([1, seq_length, seq_length], dtype_to_min(q.dtype).item(), dtype=q.dtype)
         for i in range(1, len(cu_seqlens)):
             attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = 0
 
@@ -1012,9 +1013,7 @@ class Qwen2_5OmniVisionFlashAttention2(nn.Cell):
     #     output = apply_rotary_emb(tensor_, cos, sin).type_as(tensor)
     #     return output
 
-    def construct(
-        self, hidden_states: ms.Tensor, cu_seqlens: ms.Tensor, rotary_pos_emb: ms.Tensor = None
-    ) -> ms.Tensor:
+    def construct(self, hidden_states: ms.Tensor, cu_seqlens: ms.Tensor, rotary_pos_emb: ms.Tensor = None) -> ms.Tensor:
         seq_length = hidden_states.shape[0]
         q = self.q(hidden_states).reshape(seq_length, self.num_heads, -1)
         k = self.k(hidden_states).reshape(seq_length, self.num_heads, -1)
@@ -1031,7 +1030,7 @@ class Qwen2_5OmniVisionFlashAttention2(nn.Cell):
         q = q.swapaxes(1, 2)
         k = k.swapaxes(1, 2)
         v = v.unsqueeze(0).swapaxes(1, 2)
-        attn_output = self.flash_attention(q, k, v).swapaxes(1, 2).squeeze(0).reshape(seq_length, -1) # BNSD => SND
+        attn_output = self.flash_attention(q, k, v).swapaxes(1, 2).squeeze(0).reshape(seq_length, -1)  # BNSD => SND
         attn_output = self.proj(attn_output)
         return attn_output
 
@@ -1045,9 +1044,7 @@ class Qwen2_5OmniVisionSdpaAttention(nn.Cell):
         self.v = mint.nn.Linear(dim, dim, bias=True)
         self.proj = mint.nn.Linear(dim, dim)
 
-    def construct(
-        self, hidden_states: ms.Tensor, cu_seqlens: ms.Tensor, rotary_pos_emb: ms.Tensor = None
-    ) -> ms.Tensor:
+    def construct(self, hidden_states: ms.Tensor, cu_seqlens: ms.Tensor, rotary_pos_emb: ms.Tensor = None) -> ms.Tensor:
         seq_length = hidden_states.shape[0]
         q = self.q(hidden_states).reshape(seq_length, self.num_heads, -1)
         k = self.k(hidden_states).reshape(seq_length, self.num_heads, -1)
@@ -1061,7 +1058,7 @@ class Qwen2_5OmniVisionSdpaAttention(nn.Cell):
         q = q.swapaxes(0, 1)
         k = k.swapaxes(0, 1)
         v = v.swapaxes(0, 1)
-        attn_output = scaled_dot_product_attention(q, k, v, attention_mask) # not supported, dropout_p=0.0
+        attn_output = scaled_dot_product_attention(q, k, v, attention_mask)  # not supported, dropout_p=0.0
         attn_output = attn_output.swapaxes(0, 1)
         attn_output = attn_output.reshape(seq_length, -1)
         attn_output = self.proj(attn_output)
@@ -1142,7 +1139,9 @@ class Qwen2_5_VisionPatchEmbed(nn.Cell):
         self.embed_dim = embed_dim
 
         kernel_size = (temporal_patch_size, patch_size, patch_size)
-        self.proj = mint.nn.Conv3d(in_channels, embed_dim, kernel_size=kernel_size, stride=kernel_size, bias=False).to_float(ms.float16)
+        self.proj = mint.nn.Conv3d(
+            in_channels, embed_dim, kernel_size=kernel_size, stride=kernel_size, bias=False
+        ).to_float(ms.float16)
 
     def construct(self, hidden_states: ms.Tensor) -> ms.Tensor:
         target_dtype = self.proj.weight.dtype
@@ -1317,7 +1316,7 @@ class Qwen2_5OmniVisionEncoder(Qwen2_5OmniPreTrainedModel):
 
         cu_seqlens = mint.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(
             dim=0,
-            dtype= ms.int32,
+            dtype=ms.int32,
         )
         cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0)
 
@@ -1370,9 +1369,7 @@ class Qwen2_5OmniRotaryEmbedding(nn.Cell):
         """
         seq_len = mint.max(position_ids) + 1
         if seq_len > self.max_seq_len_cached:  # growth
-            self.inv_freq, self.attention_scaling = self.rope_init_fn(
-                self.config, seq_len=seq_len, **self.rope_kwargs
-            )
+            self.inv_freq, self.attention_scaling = self.rope_init_fn(self.config, seq_len=seq_len, **self.rope_kwargs)
             # self.register_buffer("inv_freq", inv_freq, persistent=False)  # TODO joao: may break with compilation
             self.max_seq_len_cached = seq_len
 
@@ -1437,12 +1434,8 @@ def apply_multimodal_rotary_pos_emb(q, k, cos, sin, mrope_section, unsqueeze_dim
         `tuple(ms.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
     """
     mrope_section = mrope_section * 2
-    cos = mint.cat([m[i % 3] for i, m in enumerate(cos.split(mrope_section, dim=-1))], dim=-1).unsqueeze(
-        unsqueeze_dim
-    )
-    sin = mint.cat([m[i % 3] for i, m in enumerate(sin.split(mrope_section, dim=-1))], dim=-1).unsqueeze(
-        unsqueeze_dim
-    )
+    cos = mint.cat([m[i % 3] for i, m in enumerate(cos.split(mrope_section, dim=-1))], dim=-1).unsqueeze(unsqueeze_dim)
+    sin = mint.cat([m[i % 3] for i, m in enumerate(sin.split(mrope_section, dim=-1))], dim=-1).unsqueeze(unsqueeze_dim)
 
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
@@ -1910,7 +1903,7 @@ class Qwen2_5OmniThinkerTextModel(Qwen2_5OmniPreTrainedModel):
         self.norm = Qwen2RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rotary_emb = Qwen2_5OmniRotaryEmbedding(config=config)
 
-        self.gradient_checkpointing = False # TODO
+        self.gradient_checkpointing = False  # TODO
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -1941,7 +1934,9 @@ class Qwen2_5OmniThinkerTextModel(Qwen2_5OmniPreTrainedModel):
 
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        if ((input_ids is not None) and (inputs_embeds is not None)) or ((input_ids is None) and (inputs_embeds is None)):
+        if ((input_ids is not None) and (inputs_embeds is not None)) or (
+            (input_ids is None) and (inputs_embeds is None)
+        ):
             raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
 
         if self.gradient_checkpointing and self.training:
@@ -1959,9 +1954,7 @@ class Qwen2_5OmniThinkerTextModel(Qwen2_5OmniPreTrainedModel):
 
         if cache_position is None:
             past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-            cache_position = mint.arange(
-                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1]
-            )
+            cache_position = mint.arange(past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1])
 
         # the hard coded `3` is for temporal, height and width.
         if position_ids is None:
@@ -2062,7 +2055,7 @@ class Qwen2_5OmniThinkerTextModel(Qwen2_5OmniPreTrainedModel):
         # to infer the attention mask.
         past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
         using_static_cache = isinstance(past_key_values, StaticCache)
-        using_sliding_window_cache = False # TODO: isinstance(past_key_values, SlidingWindowCache)
+        using_sliding_window_cache = False  # TODO: isinstance(past_key_values, SlidingWindowCache)
 
         # When output attentions is True, sdpa implementation's forward method calls the eager implementation's forward
         # if (
@@ -2079,7 +2072,7 @@ class Qwen2_5OmniThinkerTextModel(Qwen2_5OmniPreTrainedModel):
         #     ):
         #         return None
 
-        dtype = ms.float16 #input_tensor.dtype
+        dtype = ms.float16  # input_tensor.dtype
         min_dtype = dtype_to_min(dtype)
         sequence_length = input_tensor.shape[1]
         # SlidingWindowCache or StaticCache
@@ -2156,14 +2149,14 @@ class Qwen2_5OmniThinkerTextModel(Qwen2_5OmniPreTrainedModel):
             causal_mask = attention_mask
         else:
             min_dtype = dtype_to_min(dtype).item()
-            causal_mask = mint.full(
-                (sequence_length, target_length), fill_value=min_dtype, dtype=dtype
-            )
+            causal_mask = mint.full((sequence_length, target_length), fill_value=min_dtype, dtype=dtype)
             diagonal_attend_mask = mint.arange(target_length) > cache_position.reshape(-1, 1)
             if config.get_text_config().sliding_window is not None:
                 # if we have sliding window, we should not attend to tokens beyond sliding window length, so we mask them out also
                 # the check is needed to verify is current checkpoint was trained with sliding window or not
-                if sequence_length > target_length: # TODO: not supported. not isinstance(past_key_values, SlidingWindowCache) or
+                if (
+                    sequence_length > target_length
+                ):  # TODO: not supported. not isinstance(past_key_values, SlidingWindowCache) or
                     sliding_attend_mask = mint.arange(target_length) <= (
                         cache_position.reshape(-1, 1) - config.get_text_config().sliding_window
                     )
@@ -2389,7 +2382,8 @@ class Qwen2_5OmniThinkerForConditionalGeneration(Qwen2_5OmniPreTrainedModelForCo
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if feature_attention_mask is not None:
-            audio_feature_lengths = mint.sum(feature_attention_mask, dim=1).int()
+            feature_attention_mask = feature_attention_mask.int()
+            audio_feature_lengths = mint.sum(feature_attention_mask, dim=1)
             input_features = input_features.permute((0, 2, 1))[feature_attention_mask.bool()].permute((1, 0))
         else:
             audio_feature_lengths = None
@@ -2440,33 +2434,21 @@ class Qwen2_5OmniThinkerForConditionalGeneration(Qwen2_5OmniPreTrainedModelForCo
                 audio_features = audio_outputs.last_hidden_state
                 if audio_features.shape[0] != sum(audio_output_lengths.tolist()):
                     raise ValueError("length of audio_features should match audio_output_lengths")
-                audio_mask = (
-                    (input_ids == self.config.audio_token_index)
-                    .unsqueeze(-1)
-                    .expand_as(inputs_embeds)
-                )
-                audio_features = audio_features.to( inputs_embeds.dtype)
+                audio_mask = (input_ids == self.config.audio_token_index).unsqueeze(-1).expand_as(inputs_embeds)
+                audio_features = audio_features.to(inputs_embeds.dtype)
                 inputs_embeds = inputs_embeds.masked_scatter(audio_mask, audio_features)
 
             if pixel_values is not None:
                 pixel_values = pixel_values.type(self.visual.dtype)
                 image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
-                image_mask = (
-                    (input_ids == self.config.image_token_index)
-                    .unsqueeze(-1)
-                    .expand_as(inputs_embeds)
-                )
-                image_embeds = image_embeds.to( inputs_embeds.dtype)
+                image_mask = (input_ids == self.config.image_token_index).unsqueeze(-1).expand_as(inputs_embeds)
+                image_embeds = image_embeds.to(inputs_embeds.dtype)
                 inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
 
             if pixel_values_videos is not None:
                 pixel_values_videos = pixel_values_videos.type(self.visual.dtype)
                 video_embeds = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
-                video_mask = (
-                    (input_ids == self.config.video_token_index)
-                    .unsqueeze(-1)
-                    .expand_as(inputs_embeds)
-                )
+                video_mask = (input_ids == self.config.video_token_index).unsqueeze(-1).expand_as(inputs_embeds)
                 video_embeds = video_embeds.to(inputs_embeds.dtype)
                 inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_embeds)
 
@@ -2647,7 +2629,9 @@ class Qwen2_5OmniTalkerModel(Qwen2_5OmniPreTrainedModel):
 
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        if ((input_ids is not None) and (inputs_embeds is not None)) or ((input_ids is None) and (inputs_embeds is None)):
+        if ((input_ids is not None) and (inputs_embeds is not None)) or (
+            (input_ids is None) and (inputs_embeds is None)
+        ):
             raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
 
         if self.gradient_checkpointing and self.training:
@@ -2665,9 +2649,7 @@ class Qwen2_5OmniTalkerModel(Qwen2_5OmniPreTrainedModel):
 
         if cache_position is None:
             past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-            cache_position = mint.arange(
-                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1]
-            )
+            cache_position = mint.arange(past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1])
 
         # the hard coded `3` is for temporal, height and width.
         if position_ids is None:
@@ -2768,7 +2750,7 @@ class Qwen2_5OmniTalkerModel(Qwen2_5OmniPreTrainedModel):
         # to infer the attention mask.
         past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
         using_static_cache = isinstance(past_key_values, StaticCache)
-        using_sliding_window_cache = False # TODO: isinstance(past_key_values, SlidingWindowCache)
+        using_sliding_window_cache = False  # TODO: isinstance(past_key_values, SlidingWindowCache)
 
         # When output attentions is True, sdpa implementation's forward method calls the eager implementation's forward
         # if (
@@ -2785,7 +2767,7 @@ class Qwen2_5OmniTalkerModel(Qwen2_5OmniPreTrainedModel):
         #     ):
         #         return None
 
-        dtype = ms.float16 # input_tensor.dtype
+        dtype = ms.float16  # input_tensor.dtype
         # min_dtype = dtype_to_min(dtype)
         sequence_length = input_tensor.shape[1]
         # SlidingWindowCache or StaticCache
@@ -2861,14 +2843,14 @@ class Qwen2_5OmniTalkerModel(Qwen2_5OmniPreTrainedModel):
             causal_mask = attention_mask
         else:
             min_dtype = dtype_to_min(dtype).item()
-            causal_mask = mint.full(
-                (sequence_length, target_length), fill_value=min_dtype, dtype=dtype
-            )
+            causal_mask = mint.full((sequence_length, target_length), fill_value=min_dtype, dtype=dtype)
             diagonal_attend_mask = mint.arange(target_length) > cache_position.reshape(-1, 1)
             if config.get_text_config().sliding_window is not None:
                 # if we have sliding window, we should not attend to tokens beyond sliding window length, so we mask them out also
                 # the check is needed to verify is current checkpoint was trained with sliding window or not
-                if sequence_length > target_length: # TODO: not supported.  not isinstance(past_key_values, SlidingWindowCache) or
+                if (
+                    sequence_length > target_length
+                ):  # TODO: not supported.  not isinstance(past_key_values, SlidingWindowCache) or
                     sliding_attend_mask = mint.arange(target_length) <= (
                         cache_position.reshape(-1, 1) - config.get_text_config().sliding_window
                     )
@@ -3278,9 +3260,7 @@ class AttentiveStatisticsPooling(nn.Cell):
 
         if max_len is None:
             max_len = length.max().int().item()  # using arange to generate mask
-        mask = mint.arange(max_len, dtype=length.dtype).broadcast_to(
-            (len(length), max_len)
-        ) < length.unsqueeze(1)
+        mask = mint.arange(max_len, dtype=length.dtype).broadcast_to((len(length), max_len)) < length.unsqueeze(1)
 
         mask = ms.Tensor(mask, dtype=dtype)
         return mask
@@ -3295,9 +3275,7 @@ class AttentiveStatisticsPooling(nn.Cell):
         lengths = mint.ones(hidden_states.shape[0])
 
         # Make binary mask of shape [N, 1, L]
-        mask = self._length_to_mask(
-            lengths * seq_length, max_len=seq_length, dtype=hidden_states.dtype
-        )
+        mask = self._length_to_mask(lengths * seq_length, max_len=seq_length, dtype=hidden_states.dtype)
         mask = mask.unsqueeze(1)
 
         # Expand the temporal context of the pooling layer by allowing the
@@ -3593,6 +3571,7 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     k_embed = (k * cos) + (rotate_half_codec(k) * sin)
     return q_embed, k_embed
 
+
 class DiTAttention(nn.Cell):
     def __init__(self, config: Qwen2_5OmniDiTConfig):
         super().__init__()
@@ -3720,7 +3699,9 @@ class DiTDecoderLayer(nn.Cell):
         attn_output = self.attn(
             hidden_states=norm,
             position_embeddings=position_embeddings,
-            attention_mask=mint.logical_and(block_diff >= -float(self.look_backward_block), block_diff <= float(self.look_ahead_block)),
+            attention_mask=mint.logical_and(
+                block_diff >= -float(self.look_backward_block), block_diff <= float(self.look_ahead_block)
+            ),
         )
 
         # process attention output for input x
@@ -4031,9 +4012,7 @@ class Qwen2_5OmniToken2WavBigVGANModel(Qwen2_5OmniPreTrainedModel):
         return mint.clamp((2 * max_value) * ((spectrogram - min_db) / (-min_db)) - max_value, -max_value, max_value)
 
     def amplitude_to_db(self, amplitude, min_db_level):
-        min_level = mint.exp(
-            ms.tensor(min_db_level / 20.0 * np.log(10), dtype=amplitude.dtype)
-        )
+        min_level = mint.exp(ms.tensor(min_db_level / 20.0 * np.log(10), dtype=amplitude.dtype))
         return 20 * mint.log10(mint.clamp(amplitude, min=min_level))
 
     def process_mel_spectrogram(self, mel_spectrogram):
@@ -4076,9 +4055,12 @@ class RungeKutta4ODESolver:
 
     def _compute_step(self, function, time_start, time_step, time_end, value_start):
         function_value_start = function(time_start, value_start)
-        return self._rk4_step(
-            function, time_start, time_step, time_end, value_start, function_value_start=function_value_start
-        ), function_value_start
+        return (
+            self._rk4_step(
+                function, time_start, time_step, time_end, value_start, function_value_start=function_value_start
+            ),
+            function_value_start,
+        )
 
     def _linear_interpolation(self, time_start, time_end, value_start, value_end, time_point):
         if time_point == time_start:
@@ -4174,7 +4156,7 @@ class Qwen2_5OmniToken2WavDiTModel(Qwen2_5OmniPreTrainedModel):
     ):
         batch_size = hidden_states.shape[0]
         if time_step.ndim == 0:
-            time_step = time_step.tile((batch_size, ))
+            time_step = time_step.tile((batch_size,))
 
         # Compute embeddings
         time_embedding = self.time_embed(time_step)
@@ -4253,9 +4235,7 @@ class Qwen2_5OmniToken2WavDiTModel(Qwen2_5OmniPreTrainedModel):
             return guided_prediction + (guided_prediction - null_prediction) * guidance_scale
 
         initial_time = 0
-        time_embedding = mint.linspace(
-            initial_time, 1, num_steps, dtype=conditioning_vector.dtype
-        )
+        time_embedding = mint.linspace(initial_time, 1, num_steps, dtype=conditioning_vector.dtype)
 
         if sway_coefficient is not None:
             time_embedding += sway_coefficient * (mint.cos(ms.numpy.pi / 2 * time_embedding) - 1 + time_embedding)
@@ -4293,7 +4273,7 @@ class Qwen2_5OmniToken2WavModel(Qwen2_5OmniPreTrainedModel):
             attn_impl = "sdpa"
         config.dit_config.attn_implementation = attn_impl
         self.code2wav_dit_model = Qwen2_5OmniToken2WavDiTModel(config.dit_config)
-        config.bigvgan_config.attn_implementation=attn_impl
+        config.bigvgan_config.attn_implementation = attn_impl
         self.code2wav_bigvgan_model = Qwen2_5OmniToken2WavBigVGANModel(config.bigvgan_config)
 
     def construct(
@@ -4542,12 +4522,8 @@ class Qwen2_5OmniForConditionalGeneration(Qwen2_5OmniPreTrainedModel, Generation
 
         # 2. Generate speech tokens from talker module
         thinker_generate_ids = thinker_result.sequences[:, input_ids.shape[1] :]
-        thinker_token_embeds = [
-            token_hidden_states[0] for token_hidden_states in thinker_result.hidden_states
-        ]
-        thinker_hidden_states = [
-            token_hidden_states[-1] for token_hidden_states in thinker_result.hidden_states
-        ]
+        thinker_token_embeds = [token_hidden_states[0] for token_hidden_states in thinker_result.hidden_states]
+        thinker_hidden_states = [token_hidden_states[-1] for token_hidden_states in thinker_result.hidden_states]
 
         talker_text_bos_token = speaker_params["bos_token"]
         talker_input_text_ids = mint.cat(
@@ -4582,13 +4558,9 @@ class Qwen2_5OmniForConditionalGeneration(Qwen2_5OmniPreTrainedModel, Generation
             dim=1,
         )
 
-        eos_embedding = thinker_embed_tokens(
-            ms.tensor([[self.talker.text_eos_token]], dtype=ms.int32)
-        )
+        eos_embedding = thinker_embed_tokens(ms.tensor([[self.talker.text_eos_token]], dtype=ms.int32))
 
-        pad_embedding = thinker_embed_tokens(
-            ms.tensor([[self.talker.text_pad_token]], dtype=ms.int32)
-        )
+        pad_embedding = thinker_embed_tokens(ms.tensor([[self.talker.text_pad_token]], dtype=ms.int32))
 
         thinker_reply_part = mint.cat(
             [

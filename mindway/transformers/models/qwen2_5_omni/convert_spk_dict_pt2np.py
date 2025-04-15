@@ -1,5 +1,8 @@
-import torch
+import argparse
+
 import numpy as np
+import torch
+
 
 def load_n_save_speakers(path, np_path):
     speaker_map = {}
@@ -18,7 +21,7 @@ def load_n_save_speakers(path, np_path):
             else:
                 speaker_map[key] = value
     # print("Speaker torch2ms loaded:", speaker_map)
-    print("Speaker {} loaded".format(list(speaker_map.keys())))
+    print("Speaker torch {} loaded".format(list(speaker_map.keys())))
 
     np.save(np_path, speaker_map)
 
@@ -27,10 +30,17 @@ def load_n_save_speakers(path, np_path):
     speaker_map = {}
     for key, value in np_dict.items():
         speaker_map[key] = value
-    # print("Speaker ms loaded:", speaker_map)
-    print("Speaker {} loaded".format(list(speaker_map.keys())))
+    # print("Speaker np loaded:", speaker_map)
+    print("Speaker numpy {} loaded".format(list(speaker_map.keys())))
 
-spk_path="Qwen/Qwen2.5-Omni-7B/spk_dict.pt"
-np_spk_path="Qwen/Qwen2.5-Omni-7B/spk_dict.npy"
 
-load_n_save_speakers(spk_path, np_spk_path)
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--spk_path", type=str, default="Qwen/Qwen2.5-Omni-7B/spk_dict.pt", help="path to torch speaker checkpoint"
+    )
+    parser.add_argument(
+        "--np_spk_path", type=str, default="Qwen/Qwen2.5-Omni-7B/spk_dict.npy", help="path to numpy speaker checkpoint"
+    )
+    args = parser.parse_args()
+    load_n_save_speakers(args.spk_path, args.np_spk_path)

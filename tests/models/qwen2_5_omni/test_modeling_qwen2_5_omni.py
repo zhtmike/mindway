@@ -17,8 +17,17 @@ import inspect
 import numpy as np
 import pytest
 import torch
-from transformers.models.qwen2_5_omni import Qwen2_5OmniConfig, Qwen2_5OmniThinkerConfig, Qwen2_5OmniTalkerConfig, Qwen2_5OmniToken2WavConfig
-from transformers.models.qwen2_5_omni.configuration_qwen2_5_omni import Qwen2_5OmniTextConfig, Qwen2_5OmniDiTConfig, Qwen2_5OmniBigVGANConfig
+from transformers.models.qwen2_5_omni import (
+    Qwen2_5OmniConfig,
+    Qwen2_5OmniTalkerConfig,
+    # Qwen2_5OmniThinkerConfig,
+    Qwen2_5OmniToken2WavConfig,
+)
+from transformers.models.qwen2_5_omni.configuration_qwen2_5_omni import (
+    # Qwen2_5OmniBigVGANConfig,
+    # Qwen2_5OmniDiTConfig,
+    Qwen2_5OmniTextConfig,
+)
 
 import mindspore as ms
 
@@ -31,10 +40,10 @@ from tests.modeling_test_utils import (
 )
 from tests.models.modeling_common import ids_numpy
 
-DTYPE_AND_THRESHOLDS = {"fp32": 5e-4, "fp16": 5e-4, "bf16": 6e-3} # Thinker
-# DTYPE_AND_THRESHOLDS = {"fp32": 5e-42, "fp16": 5e-4, "bf16": 7e-3} # Talker
-# MODES = [0, 1]
-MODES = [1]
+DTYPE_AND_THRESHOLDS = {"fp32": 5e-4, "fp16": 5e-4, "bf16": 6e-3}  # Thinker
+# DTYPE_AND_THRESHOLDS = {"fp32": 5e-4, "fp16": 5e-4, "bf16": 7e-3} # Talker
+MODES = [1]  # TODO: graph mode
+
 
 class Qwen2_5_OmniModelTester:
     def __init__(
@@ -57,7 +66,7 @@ class Qwen2_5_OmniModelTester:
         max_position_embeddings=512,
         use_sliding_window=False,
         eos_token_id=1,
-        attn_implementation="eager"
+        attn_implementation="eager",
     ):
         self.batch_size = batch_size
         self.encoder_seq_length = encoder_seq_length
@@ -76,17 +85,13 @@ class Qwen2_5_OmniModelTester:
         self.intermediate_size = intermediate_size
         self.max_position_embeddings = max_position_embeddings
         self.use_sliding_window = use_sliding_window
-        self.attn_implementation=attn_implementation
+        self.attn_implementation = attn_implementation
         self.eos_token_id = eos_token_id
         self.rope_scaling = {
-            "mrope_section": [
-            2,
-            3,
-            3
-            ],
+            "mrope_section": [2, 3, 3],
             "rope_type": "default",
-            "type": "default"
-        } # sum*2=16 = head_dim = hidden_size//num_attention_heads = 128//8=16
+            "type": "default",
+        }  # sum*2=16 = head_dim = hidden_size//num_attention_heads = 128//8=16
 
     def get_large_model_config(self):
         return Qwen2_5OmniConfig.from_pretrained("Qwen/Qwen2.5-Omni-7B")
@@ -123,8 +128,6 @@ class Qwen2_5_OmniModelTester:
             lm_labels,
         )
 
-
-
     def get_config(self):
         thinker_config = Qwen2_5OmniTextConfig(
             vocab_size=self.vocab_size,
@@ -144,11 +147,11 @@ class Qwen2_5_OmniModelTester:
             audio_token_index=151646,
             image_token_index=151655,
             video_token_index=151656,
-            vocab_size=self.vocab_size, # 8448,
-            tts_codec_start_token_id=93, # 8293,
-            tts_codec_end_token_id=94, # 8294,
-            tts_codec_pad_token_id=92, # 8292,
-            tts_codec_mask_token_id=96, # 8296,
+            vocab_size=self.vocab_size,  # 8448,
+            tts_codec_start_token_id=93,  # 8293,
+            tts_codec_end_token_id=94,  # 8294,
+            tts_codec_pad_token_id=92,  # 8292,
+            tts_codec_mask_token_id=96,  # 8296,
             embedding_size=self.hidden_size,
             hidden_size=self.hidden_size,
             intermediate_size=self.intermediate_size,
@@ -158,15 +161,15 @@ class Qwen2_5_OmniModelTester:
             rope_scaling=self.rope_scaling,
             head_dim=16,
             use_cache=self.use_cache,
-            use_sliding_window=self.use_sliding_window, # False
+            use_sliding_window=self.use_sliding_window,  # False
             audio_start_token_id=151647,
             audio_end_token_id=151648,
             attn_implementation=self.attn_implementation,
         )
 
-        dit_config = Qwen2_5OmniDiTConfig()
-        bigvgan_config = Qwen2_5OmniBigVGANConfig()
-        token2wav_config = Qwen2_5OmniToken2WavConfig(dit_config, bigvgan_config)
+        # dit_config = Qwen2_5OmniDiTConfig()
+        # bigvgan_config = Qwen2_5OmniBigVGANConfig()
+        token2wav_config = Qwen2_5OmniToken2WavConfig()
 
         return thinker_config, talker_config, token2wav_config
 
@@ -187,16 +190,12 @@ model_tester = Qwen2_5_OmniModelTester()
 T5_CASES = [
     [
         "Qwen2_5OmniThinkerTextModel",
-        "transformers.models.qwen2_5_omni.Qwen2_5OmniThinkerModel", # NOTE: name is different from latest version
+        "transformers.models.qwen2_5_omni.Qwen2_5OmniThinkerModel",  # NOTE: name is different from latest version
         "mindway.transformers.Qwen2_5OmniThinkerTextModel",
         (thinker_config,),
         {},
         (),
-        {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "return_dict": True
-        },
+        {"input_ids": input_ids, "attention_mask": attention_mask, "return_dict": True},
         {
             "last_hidden_state": "last_hidden_state",
         },

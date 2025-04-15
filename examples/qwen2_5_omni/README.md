@@ -17,16 +17,24 @@ The abstract from the [Qwen2.5-Omni Technical Report](https://arxiv.org/abs/2503
 
 ### Installation
 ```
+# with installed mindway
 cd examples/qwen2_5_omni
-pip install -r examples/qwen2_5_omni/requirements.txt
+pip install -r requirements.txt
 ```
-
-### Usage examples
+### Model Checkpoints
 
 `Qwen2.5-Omni-7B` chekpoint can be found on the [Huggingface Hub](https://huggingface.co/collections/Qwen/qwen25-omni-67de1e5f0f9464dc6314b36e).
 
+The speakers checkpoint need to be converted before use:
+```python
+python mindway\transformers\models\qwen2_5_omni\convert_spk_dict_pt2np.py \
+    --spk_path "Qwen/Qwen2.5-Omni-7B/spk_dict.pt" \
+    --np_spk_path"Qwen/Qwen2.5-Omni-7B/spk_dict.npy"
+```
+### Usage Examples
 
-Here are some usage examples and scripts:
+
+Here are some usage chat examples and scripts with `mindway.transformers`:
 |Example|	Description	|
 |---|---|
 |[Text-Only Generation](text_only_generation.py) | Q&A with Qwen2.5-Omni by text, image, video input and text-only output.
@@ -35,7 +43,7 @@ Here are some usage examples and scripts:
 |[Screen Recording Interaction](screen_recording_interaction.py)	| Get the information and content you want to know by asking questions in real time on the recording screen.	|
 |[Video Information Extracting](video_information_extracting.py)	| Obtaining information from the video stream. |
 |[Omni Chatting for Music](omni_chatting_for_music.py)	| Chat with Qwen2.5-Omni about music content in a audio and video stream.|
-| [Omni Chatting for Math](mni_chatting_for_math.py)	|Chat with Qwen2.5-Omni about math content in a audio and video stream.|
+| [Omni Chatting for Math](omni_chatting_for_math.py)	|Chat with Qwen2.5-Omni about math content in a audio and video stream.|
 |[Multi Round Omni Chatting](multi_round_omni_chatting.py)	|Conducted multiple rounds of audio and video dialogues with Qwen2.5-Omni to provide the most comprehensive ability demonstration.|
 
 ### Single Media inference
@@ -44,10 +52,13 @@ The model can accept text, images, audio and videos as input. Here's an example 
 
 ```python
 import soundfile as sf
+import numpy as np
 import mindspore as ms
 from mindway.transformers import Qwen2_5OmniForConditionalGeneration
 from mindway.transformers.models.qwen2_5_omni import Qwen2_5OmniProcessor
+from mindway.transformers.models.qwen2_5_omni.qwen_omni_utils import process_mm_info
 
+# Load model
 model = Qwen2_5OmniForConditionalGeneration.from_pretrained("Qwen/Qwen2.5-Omni-7B")
 processor = Qwen2_5OmniProcessor.from_pretrained("Qwen/Qwen2.5-Omni-7B")
 
@@ -67,19 +78,14 @@ conversation = [
     },
 ]
 
-inputs = processor.apply_chat_template(
-    conversations,
-    load_audio_from_video=True,
-    add_generation_prompt=True,
-    tokenize=True,
-    return_dict=True,
-    return_tensors="np",
-    video_fps=1,
 
-    # kwargs to be passed to `Qwen2-5-OmniProcessor`
-    padding=True,
-    use_audio_in_video=True,
-)
+# Preparation for inference
+USE_AUDIO_IN_VIDEO = True # set use audio in video
+
+text = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
+audios, images, videos = process_mm_info(conversation, use_audio_in_video=USE_AUDIO_IN_VIDEO)
+inputs = processor(text=text, audio=audios, images=images, videos=videos, return_tensors="np", padding=True, use_audio_in_video=USE_AUDIO_IN_VIDEO)
+
 # convert input to Tensor
 for key, value in inputs.items():
     if isinstance(value, np.ndarray):
@@ -89,20 +95,23 @@ for key, value in inputs.items():
     else:
         inputs[key] = inputs[key].to(model.dtype)
 
-text_ids, audio = model.generate(**inputs, use_audio_in_video=True)
+# Inference: Generation of the output text and audio
+text_ids, audio = model.generate(**inputs, use_audio_in_video=USE_AUDIO_IN_VIDEO)
+text_ids = [
+    output_ids[len(input_ids):] for input_ids, output_ids in zip(inputs.input_ids, text_ids)
+]
 text = processor.batch_decode(text_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
-
+print(text)
 sf.write(
     "output.wav",
     audio.reshape(-1).asnumpy(),
     samplerate=24000,
 )
-print(text)
 ```
 
 ### Text-only generation
 
-To generate only text output and save compute by not loading the audio generation model, we can set `enable_audio_output=False` when loading the model. See more example usages in `text_only_generation.py`.
+To generate only text output and save compute by not loading the audio generation model, we can set `return_audio=False` when running the model. See more example usages in `text_only_generation.py`.
 
 ```python
 import mindspore as ms
@@ -111,7 +120,8 @@ from mindway.transformers.models.qwen2_5_omni import Qwen2_5OmniProcessor
 
 model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
     "Qwen/Qwen2.5-Omni-7B",
-    enable_audio_output=False,
+    mindspore_dtype=ms.float16,
+    attn_implementation="flash_attention_2",
 )
 processor = Qwen2_5OmniProcessor.from_pretrained("Qwen/Qwen2.5-Omni-7B")
 
@@ -125,25 +135,23 @@ conversation = [
     {
         "role": "user",
         "content": [
-            {"type": "video", "video": "/path/to/video.mp4"},
+            {
+                "type": "video",
+                "video": "/path/to/video.mp4"
+                "max_pixels": 360 * 420,
+            },
             {"type": "text", "text": "What cant you hear and see in this video?"},
         ],
     },
 ]
 
-inputs = processor.apply_chat_template(
-    conversations,
-    load_audio_from_video=True,
-    add_generation_prompt=True,
-    tokenize=True,
-    return_dict=True,
-    return_tensors="np",
-    video_fps=1,
+# Preparation for inference
+USE_AUDIO_IN_VIDEO = True # set use audio in video
 
-    # kwargs to be passed to `Qwen2-5-OmniProcessor`
-    padding=True,
-    use_audio_in_video=True,
-)
+text = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
+audios, images, videos = process_mm_info(conversation, use_audio_in_video=USE_AUDIO_IN_VIDEO)
+inputs = processor(text=text, audio=audios, images=images, videos=videos, return_tensors="np", padding=True, use_audio_in_video=USE_AUDIO_IN_VIDEO)
+
 # convert input to Tensor
 for key, value in inputs.items():
     if isinstance(value, np.ndarray):
@@ -153,14 +161,13 @@ for key, value in inputs.items():
     else:
         inputs[key] = inputs[key].to(model.dtype)
 
-text_ids = model.generate(**inputs, use_audio_in_video=True, return_audio=False)
+# Inference: Generation of the output text and audio
+# set not to return audio
+text_ids = model.generate(**inputs, use_audio_in_video=USE_AUDIO_IN_VIDEO, return_audio=False)
+text_ids = [
+    output_ids[len(input_ids):] for input_ids, output_ids in zip(inputs.input_ids, text_ids)
+]
 text = processor.batch_decode(text_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
-
-sf.write(
-    "output.wav",
-    audio.reshape(-1).asnumpy(),
-    samplerate=24000,
-)
 print(text)
 ```
 
@@ -188,7 +195,7 @@ conversation1 = [
     {
         "role": "user",
         "content": [
-            {"type": "video", "path": "/path/to/video.mp4"},
+            {"type": "video", "video": "/path/to/video.mp4"},
         ]
     }
 ]
@@ -204,7 +211,7 @@ conversation2 = [
     {
         "role": "user",
         "content": [
-            {"type": "audio", "path": "/path/to/audio.wav"},
+            {"type": "audio", "audio": "/path/to/audio.wav"},
         ]
     }
 ]
@@ -235,9 +242,9 @@ conversation4 = [
     {
         "role": "user",
         "content": [
-            {"type": "image", "path": "/path/to/image.jpg"},
-            {"type": "video", "path": "/path/to/video.mp4"},
-            {"type": "audio", "path": "/path/to/audio.wav"},
+            {"type": "image", "image": "/path/to/image.jpg"},
+            {"type": "video", "video": "/path/to/video.mp4"},
+            {"type": "audio", "audio": "/path/to/audio.wav"},
             {"type": "text", "text": "What are the elements can you see and hear in these medias?"},
         ],
     }
@@ -282,15 +289,15 @@ The model supports a wide range of resolution inputs. By default, it uses the na
 ```python
 min_pixels = 128*28*28
 max_pixels = 768*28*28
-processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-Omni-7B", min_pixels=min_pixels, max_pixels=max_pixels)
+processor = Qwen2_5OmniProcessor.from_pretrained("Qwen/Qwen2.5-Omni-7B", min_pixels=min_pixels, max_pixels=max_pixels)
 ```
 
 #### Prompt for audio output
-If users need audio output, the system prompt must be set as "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech.", otherwise the audio output may not work as expected.
+If users need audio output, the system prompt must be set as `"You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech."`, otherwise the audio output may not work as expected.
 ```
 {
     "role": "system",
-    "content": "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech.",
+    "content": [{"type": "text", "text": "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech."}],
 }
 ```
 
@@ -337,7 +344,6 @@ from mindway.transformers import Qwen2_5OmniForConditionalGeneration
 
 model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
     "Qwen/Qwen2.5-Omni-7B",
-    mindspore_dtype=mindspore.bfloat16,
     attn_implementation="flash_attention_2",
 )
 ```
@@ -349,5 +355,7 @@ Experiments are tested on ascend 910* with mindspore 2.5.0 pynative mode.
 
 |model| precision | task | resolution| FA | s/step | steps|
 |---|---|---|---|---|---|---|
-|Qwen2.5-Omni-7B| fp32 | text Q&A | N.A. | ON | 0.20 | 21 |
+|Qwen2.5-Omni-7B| fp32 | pure text Q&A | N.A. | ON | 0.20 | 21 |
 |Qwen2.5-Omni-7B| fp32 | video VQA w/ audio| 20x280x504 | ON | 0.16 | 80 |
+|Qwen2.5-Omni-7B| fp16 | pure text Q&A | N.A. | ON | 0.22 | 21 |
+|Qwen2.5-Omni-7B| fp16 | video VQA w/ audio| 20x280x504 | ON | 0.23 | 30 |

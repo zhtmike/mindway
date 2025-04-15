@@ -3,30 +3,42 @@ Video Information Extracting with Qwen2.5-Omni
 This script demonstrates how to use Qwen2.5-Omni to obtain information from the video stream.
 """
 
-import mindspore as ms
 import numpy as np
+
+import mindspore as ms
+
 from mindway.transformers import Qwen2_5OmniForConditionalGeneration
 from mindway.transformers.models.qwen2_5_omni import Qwen2_5OmniProcessor
 from mindway.transformers.models.qwen2_5_omni.qwen_omni_utils import process_mm_info
+
 
 # inference function
 def inference(video_path, prompt, sys_prompt):
     messages = [
         {"role": "system", "content": [{"type": "text", "text": sys_prompt}]},
-        {"role": "user", "content": [
+        {
+            "role": "user",
+            "content": [
                 {"type": "text", "text": prompt},
                 {
                     "type": "video",
                     "video": video_path,
                     "max_pixels": 360 * 420,
-
                 },
-            ]
+            ],
         },
     ]
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     audios, images, videos = process_mm_info(messages, use_audio_in_video=False)
-    inputs = processor(text=text, audio=audios, images=images, videos=videos, return_tensors="np", padding=True, use_audio_in_video=False)
+    inputs = processor(
+        text=text,
+        audio=audios,
+        images=images,
+        videos=videos,
+        return_tensors="np",
+        padding=True,
+        use_audio_in_video=False,
+    )
     # convert input to Tensor
     for key, value in inputs.items():  # by default input numpy array or list
         if isinstance(value, np.ndarray):
@@ -48,41 +60,35 @@ def inference(video_path, prompt, sys_prompt):
 model_path = "Qwen/Qwen2.5-Omni-7B"
 model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
     model_path,
-    # mindspore_dtype=ms.bfloat16,
+    mindspore_dtype=ms.float16,
     attn_implementation="flash_attention_2",
 )
 processor = Qwen2_5OmniProcessor.from_pretrained(model_path)
 print("Finished loading model and processor.")
 
 # Question 1
-print("*"*100)
+print("*" * 100)
 print("***** Question 1 *****")
 video_path = "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2.5-Omni/shopping.mp4"
 prompt = "How many kind of drinks can you see in the video?"
-
-## Use a local model to inference.
 response = inference(video_path, prompt=prompt, sys_prompt="You are a helpful assistant.")
 print("***** Response 1 *****")
 print(response[0])
 
 
-print("*"*100)
+print("*" * 100)
 print("***** Question 2 *****")
 video_path = "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2.5-Omni/shopping.mp4"
 prompt = "How many bottles of drinks have I picked up?"
-
-## Use a local HuggingFace model to inference.
 response = inference(video_path, prompt=prompt, sys_prompt="You are a helpful assistant.")
 print("***** Response 2 *****")
 print(response[0])
 
 
-print("*"*100)
+print("*" * 100)
 print("***** Question 3 *****")
 video_path = "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2.5-Omni/shopping.mp4"
 prompt = "How many milliliters are there in the bottle I picked up second time?"
-
-## Use a local HuggingFace model to inference.
 response = inference(video_path, prompt=prompt, sys_prompt="You are a helpful assistant.")
 print("***** Response 3 *****")
 print(response[0])

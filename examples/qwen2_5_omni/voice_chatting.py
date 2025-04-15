@@ -3,27 +3,40 @@ Voice Chatting with Qwen2.5-Omni
 This script demonstrates how to chat with Qwen2.5-Omni by voice input and output.
 """
 
-import soundfile as sf
 import numpy as np
+import soundfile as sf
+
 import mindspore as ms
+
 from mindway.transformers import Qwen2_5OmniForConditionalGeneration
 from mindway.transformers.models.qwen2_5_omni import Qwen2_5OmniProcessor
 from mindway.transformers.models.qwen2_5_omni.qwen_omni_utils import process_mm_info
+
 
 # inference function
 def inference(medium_path):
     sys_prompt = "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech."
     messages = [
         {"role": "system", "content": [{"type": "text", "text": sys_prompt}]},
-        {"role": "user", "content": [
+        {
+            "role": "user",
+            "content": [
                 {"type": "audio", "audio": medium_path},
-            ]
+            ],
         },
     ]
 
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     audios, images, videos = process_mm_info(messages, use_audio_in_video=True)
-    inputs = processor(text=text, audio=audios, images=images, videos=videos, return_tensors="np", padding=True, use_audio_in_video=True)
+    inputs = processor(
+        text=text,
+        audio=audios,
+        images=images,
+        videos=videos,
+        return_tensors="np",
+        padding=True,
+        use_audio_in_video=True,
+    )
 
     # convert input to Tensor
     for key, value in inputs.items():  # by default input numpy array or list
@@ -40,11 +53,12 @@ def inference(medium_path):
     text = processor.batch_decode(text_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
     return text, audio
 
+
 # Load the model
 # We recommend enabling flash_attention_2 for better acceleration and memory saving.
 model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
     "Qwen/Qwen2.5-Omni-7B",
-    mindspore_dtype=ms.bfloat16,
+    mindspore_dtype=ms.float16,
     use_safetensors=True,
     attn_implementation="flash_attention_2",
 )
@@ -52,7 +66,7 @@ processor = Qwen2_5OmniProcessor.from_pretrained("Qwen/Qwen2.5-Omni-7B")
 print("Finished loading model and processor.")
 
 # Voice Chat Example 1
-print("*"*100)
+print("*" * 100)
 print("***** Voice Chat Example 1 *****")
 audio_path = "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-Audio/audio/guess_age_gender.wav"
 response = inference(audio_path)
@@ -65,7 +79,7 @@ sf.write(
 )
 
 # Voice Chat Example 2
-print("*"*100)
+print("*" * 100)
 print("***** Voice Chat Example 2 *****")
 audio_path = "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-Audio/audio/translate_to_chinese.wav"
 response = inference(audio_path)
