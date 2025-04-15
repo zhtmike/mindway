@@ -32,6 +32,7 @@ def parse_args():
         "-o", "--output_path", default="./output", help="Output directory to save the inference result."
     )
 
+    parser.add_argument("--checkpoint", help="Finetuned checkpoint.")
     parser.add_argument("--seed", default=42, type=int, help="Training seed.")
     parser.add_argument("--mode", default=1, choices=[0, 1], help="Running in GRAPH_MODE(0) or PYNATIVE_MODE(1).")
     parser.add_argument("--jit_level", default="O0", choices=["O0", "O1"], help="Jit Level")
@@ -67,7 +68,14 @@ def main(args):
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     with nn.no_init_parameters():
         dtype_mapping = {"fp32": ms.float32, "fp16": ms.float16, "bf16": ms.bfloat16}
-        model = Qwen2ForCausalLM.from_pretrained(args.model_name, mindspore_dtype=dtype_mapping[args.dtype])
+        model = Qwen2ForCausalLM.from_pretrained(
+            args.model_name, mindspore_dtype=dtype_mapping[args.dtype], attn_implementation="flash_attention_2"
+        )
+        if args.checkpoint:
+            state_dict = ms.load_checkpoint(args.checkpoint)
+            for k, v in state_dict.items():
+                state_dict[k] = ms.Parameter(v.to(model.dtype))
+            ms.load_param_into_net(model, state_dict, strict_load=True)
 
     messages = [
         {"role": "system", "content": "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."},

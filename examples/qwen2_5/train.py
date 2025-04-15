@@ -53,11 +53,11 @@ def parse_args():
         choices=["fp32", "bf16"],
         help="If it is not fp32, then train with auto mixed precision.",
     )
-    parser.add_argument("--optim", default="adamw", type=str, choices=["adamw", "came"], help="Optimizer name.")
+    parser.add_argument("--optim", default="adamw", type=str, choices=["adamw", "muon"], help="Optimizer name.")
     parser.add_argument("--lr", default=1e-4, type=float, help="The learning rate.")
     parser.add_argument("--weight_decay", default=0.1, type=float, help="Weight decay.")
     parser.add_argument("--epochs", default=200, type=int, help="Number of total training epochs.")
-    parser.add_argument("--batch_size", default=4, type=int, help="Training batch size.")
+    parser.add_argument("--batch_size", default=8, type=int, help="Training batch size.")
     parser.add_argument("--ckpt_max_keep", default=3, type=int, help="Maximum number of checkpoints to keep.")
     parser.add_argument("--clip_grad", default=True, type=str2bool, help="Clip gradient.")
     parser.add_argument("--clip_grad_value", default=1.0, type=float, help="Clip gradient value.")
@@ -94,10 +94,12 @@ def main(args):
     config = Qwen2Config.from_pretrained(args.model_name)
     if args.load_weight:
         with nn.no_init_parameters():
-            model = Qwen2ForCausalLM.from_pretrained(args.model_name, config=config)
+            model = Qwen2ForCausalLM.from_pretrained(
+                args.model_name, config=config, attn_implementation="flash_attention_2"
+            )
     else:
         logger.info("Initialize network randomly.")
-        model = Qwen2ForCausalLM(config)
+        model = Qwen2ForCausalLM(config, attn_implementation="flash_attention_2")
     model.set_train()
 
     if args.dtype != "fp32":
@@ -155,7 +157,11 @@ def main(args):
                 step_time * 1000,
             )
         ckpt_name = os.path.join(ckpt_dir, "last.ckpt")
-        ms.save_checkpoint(model, ckpt_name)
+        # FIXME: somehow the prefix of the parameter names are dropped after value_and_grad
+        # here we just manually fix them
+        for name, param in model.parameters_and_names():
+            param.name = name
+        ms.save_checkpoint(model.trainable_params(), ckpt_name)
 
 
 if __name__ == "__main__":

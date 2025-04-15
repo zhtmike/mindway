@@ -137,6 +137,42 @@ def eager_attention_forward(
     return attn_output, attn_weights
 
 
+def flash_attention_forward(
+    module: nn.Cell,
+    query: ms.Tensor,
+    key: ms.Tensor,
+    value: ms.Tensor,
+    attention_mask: Optional[ms.Tensor],
+    scaling: float,
+    dropout: float = 0.0,
+    **kwargs,
+):
+    key_states = repeat_kv(key, module.num_key_value_groups)
+    value_states = repeat_kv(value, module.num_key_value_groups)
+
+    if attention_mask is not None:
+        causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
+        causal_mask = causal_mask.to(ms.bool_)
+    else:
+        causal_mask = None
+
+    attn_output = ops.flash_attention_score(
+        query,
+        key_states,
+        value_states,
+        head_num=query.shape[1],
+        attn_mask=causal_mask,
+        keep_prob=1 - dropout,
+        scalar_value=scaling,
+        input_layout="BNSD",
+    )
+    attn_output = attn_output.transpose(1, 2)
+    return attn_output, None
+
+
+ALL_ATTENTION_FUNCTIONS = {"flash_attention_2": flash_attention_forward}
+
+
 class Qwen2Attention(nn.Cell):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
@@ -172,6 +208,7 @@ class Qwen2Attention(nn.Cell):
 
         cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        query_states, key_states = query_states.to(value_states.dtype), key_states.to(value_states.dtype)
 
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
@@ -194,7 +231,7 @@ class Qwen2Attention(nn.Cell):
                     'eager attention. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
                 )
             else:
-                raise NotImplementedError
+                attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
         attn_output, attn_weights = attention_interface(
             self,
@@ -241,11 +278,6 @@ class Qwen2DecoderLayer(nn.Cell):
         self.mlp = Qwen2MLP(config)
         self.input_layernorm = Qwen2RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = Qwen2RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        if config.sliding_window and config._attn_implementation != "flash_attention_2":
-            logger.warning_once(
-                f"Sliding Window Attention is enabled but not implemented for `{config._attn_implementation}`; "
-                "unexpected results may be encountered."
-            )
 
     def construct(
         self,
@@ -585,19 +617,6 @@ class Qwen2Model(Qwen2PreTrainedModel):
         past_key_values: Cache,
         output_attentions: bool = False,
     ):
-        if self.config._attn_implementation == "flash_attention_2":
-            if attention_mask is not None and past_key_values is not None:
-                is_padding_right = attention_mask[:, -1].sum().item() != input_tensor.size()[0]
-                if is_padding_right:
-                    raise ValueError(
-                        "You are attempting to perform batched generation with padding_side='right'"
-                        " this may lead to unexpected behaviour for Flash Attention version of Qwen2. Make sure to "
-                        " call `tokenizer.padding_side  = 'left'` before tokenizing the input. "
-                    )
-            if attention_mask is not None and 0.0 in attention_mask:
-                return attention_mask
-            return None
-
         # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument, in
         # order to dispatch on Flash Attention 2. This feature is not compatible with static cache, as SDPA will fail
         # to infer the attention mask.
