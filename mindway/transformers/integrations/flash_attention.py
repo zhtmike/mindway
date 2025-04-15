@@ -38,19 +38,13 @@ def flash_attention_forward(
     seq_len_key = key.shape[2]
     if attention_mask is not None:
         attention_mask = mint.logical_not(attention_mask) if attention_mask.dtype == ms.bool_ else attention_mask.bool()
-        attention_mask = mint.broadcast_to(
-            attention_mask, (attention_mask.shape[0], attention_mask.shape[1], seq_len, seq_len_key))[:, -1, :, :]
 
-
-    attn_output = _flash_attention_forward(
-        query,
-        key,
-        value,
-        attention_mask,
-        keep_prob=1.0 - dropout,
-        scale_value=scaling,
-        **kwargs,
-    )
+    # flash_attention only supports [float16, bfloat16]
+    origin_dtype = query.dtype
+    if origin_dtype not in (ms.float16, ms.bfloat16):
+        query = query.to(ms.float16)
+        key = key.to(ms.float16)
+        value = value.to(ms.float16)
 
     attn_output = ops.flash_attention_score(
         query,
@@ -62,5 +56,6 @@ def flash_attention_forward(
         scalar_value=scaling,
         input_layout=input_layout,
     )
+    attn_output = attn_output.to(origin_dtype)
 
     return attn_output, None

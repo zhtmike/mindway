@@ -10,16 +10,16 @@ if __name__ == "__main__":
 
     import time
 
-    ms.set_context(mode=ms.PYNATIVE_MODE)
-    ms.runtime.launch_blocking()
-    # ms.set_context(mode=ms.GRAPH_MODE, jit_syntax_level=ms.STRICT) # NOT SUPPORTED YET
+    # ms.set_context(mode=ms.PYNATIVE_MODE)
+    # ms.runtime.launch_blocking()
+    ms.set_context(mode=ms.GRAPH_MODE, jit_syntax_level=ms.STRICT) # NOT SUPPORTED YET
 
     # TEST: loading model
     start_time = time.time()
     config = Qwen3Config(
         num_hidden_layers=1,
         use_cache=False,
-        attn_implementation="eager",
+        attn_implementation="flash_attention_2",
         sliding_window=None,
     )
 
