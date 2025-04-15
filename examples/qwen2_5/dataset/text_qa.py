@@ -1,8 +1,12 @@
+import logging
+import random
 from typing import Optional, Tuple, Union
 
 import numpy as np
 from datasets import load_dataset
 from transformers import AutoTokenizer, PreTrainedTokenizer
+
+logger = logging.getLogger(__name__)
 
 
 class TextQADataset:
@@ -17,7 +21,7 @@ class TextQADataset:
             self.dataset = load_dataset(dataset_name, "pqa_labeled", split="train")
             self._dataset_name = "pubmed_qa"
         elif dataset_name.lower().endswith("openorca"):
-            self.dataset = load_dataset(dataset_name, split="train[1:]")
+            self.dataset = load_dataset(dataset_name, split="train")
             self._dataset_name = "openorca"
         else:
             raise NotImplementedError
@@ -32,6 +36,7 @@ class TextQADataset:
 
     def __getitem__(self, idx: Union[int, np.ndarray]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         record = self.dataset[int(idx)]
+
         if self._dataset_name == "pubmed_qa":
             question = record["question"]
             answer = record["long_answer"]
@@ -41,14 +46,19 @@ class TextQADataset:
             answer = record["response"]
             system_prompt = record["system_prompt"]
 
-        input_ids, labels, attention_mask = preprocess(
-            question,
-            answer,
-            self.tokenizer,
-            system_prompt=system_prompt,
-            max_length=self.max_token_length,
-            ignore_index=self.ignore_index,
-        )
+        try:
+            input_ids, labels, attention_mask = preprocess(
+                question,
+                answer,
+                self.tokenizer,
+                system_prompt=system_prompt,
+                max_length=self.max_token_length,
+                ignore_index=self.ignore_index,
+            )
+        except IndexError as e:
+            logger.debug(repr(e))
+            return self[random.randint(0, len(self))]
+
         return input_ids, labels, attention_mask
 
 
@@ -60,7 +70,7 @@ def preprocess(
     max_length: int = 512,
     ignore_index: int = -100,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    if system_prompt is None:
+    if not system_prompt:
         system_prompt = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
 
     conversation = [

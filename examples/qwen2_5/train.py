@@ -111,6 +111,7 @@ def main(args):
     # prepare dataset
     logger.info("Creating dataset `%s`", args.dataset_name)
     dataset = TextQADataset(args.dataset_name, max_token_length=args.max_token_length, tokenizer_name=args.model_name)
+    logger.info("Number of records: %d", len(dataset))
     data_generator = GeneratorDataset(
         dataset,
         column_names=["input_ids", "labels", "attention_mask"],
