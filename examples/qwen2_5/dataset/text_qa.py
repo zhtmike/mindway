@@ -8,15 +8,17 @@ from transformers import AutoTokenizer, PreTrainedTokenizer
 class TextQADataset:
     def __init__(
         self,
-        data_dir: Optional[str] = None,
-        dataset_name: Optional[str] = None,
+        dataset_name: str,
         max_token_length: int = 1024,
         ignore_index: int = -100,
         tokenizer_name: str = "Qwen/Qwen2.5-0.5B-Instruct",
     ) -> None:
-        data_dir = dataset_name if data_dir is None else data_dir
-        if dataset_name == "pubmed_qa":
-            self.dataset = load_dataset(data_dir, "pqa_labeled", split="train")
+        if dataset_name.lower().endswith("pubmed_qa"):
+            self.dataset = load_dataset(dataset_name, "pqa_labeled", split="train")
+            self._dataset_name = "pubmed_qa"
+        elif dataset_name.lower().endswith("openorca"):
+            self.dataset = load_dataset(dataset_name, split="train[1:]")
+            self._dataset_name = "openorca"
         else:
             raise NotImplementedError
 
@@ -30,20 +32,39 @@ class TextQADataset:
 
     def __getitem__(self, idx: Union[int, np.ndarray]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         record = self.dataset[int(idx)]
+        if self._dataset_name == "pubmed_qa":
+            question = record["question"]
+            answer = record["long_answer"]
+            system_prompt = None
+        else:
+            question = record["question"]
+            answer = record["response"]
+            system_prompt = record["system_prompt"]
+
         input_ids, labels, attention_mask = preprocess(
-            record, self.tokenizer, max_length=self.max_token_length, ignore_index=self.ignore_index
+            question,
+            answer,
+            self.tokenizer,
+            system_prompt=system_prompt,
+            max_length=self.max_token_length,
+            ignore_index=self.ignore_index,
         )
         return input_ids, labels, attention_mask
 
 
 def preprocess(
-    example, tokenizer: PreTrainedTokenizer, max_length: int = 512, ignore_index: int = -100
+    question: str,
+    answer: str,
+    tokenizer: PreTrainedTokenizer,
+    system_prompt: Optional[str] = None,
+    max_length: int = 512,
+    ignore_index: int = -100,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    question = example["question"]
-    answer = example["long_answer"]
+    if system_prompt is None:
+        system_prompt = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
 
     conversation = [
-        {"role": "system", "content": "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": question},
         {"role": "assistant", "content": answer},
     ]
