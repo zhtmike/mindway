@@ -40,11 +40,12 @@ Here are some usage chat examples and scripts with `mindway.transformers`:
 |[Text-Only Generation](text_only_generation.py) | Q&A with Qwen2.5-Omni by text, image, video input and text-only output.
 |[Universal Audio Understanding](universal_audio_understanding.py)|	Speech recongnition, speech-to-text translation and audio analysis.	|
 |[Voice Chatting](voice_chatting.py)	| Chatting with Qwen2.5-Omni by voice input and output.	|
-|[Screen Recording Interaction](screen_recording_interaction.py)	| Get the information and content you want to know by asking questions in real time on the recording screen.	|
 |[Video Information Extracting](video_information_extracting.py)	| Obtaining information from the video stream. |
 |[Omni Chatting for Music](omni_chatting_for_music.py)	| Chat with Qwen2.5-Omni about music content in a audio and video stream.|
 | [Omni Chatting for Math](omni_chatting_for_math.py)	|Chat with Qwen2.5-Omni about math content in a audio and video stream.|
 |[Multi Round Omni Chatting](multi_round_omni_chatting.py)	|Conducted multiple rounds of audio and video dialogues with Qwen2.5-Omni to provide the most comprehensive ability demonstration.|
+
+<!-- OOM: |[Screen Recording Interaction](screen_recording_interaction.py)	| Get the information and content you want to know by asking questions in real time on the recording screen.	| -->
 
 ### Single Media inference
 

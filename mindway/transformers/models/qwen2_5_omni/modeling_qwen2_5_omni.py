@@ -59,19 +59,8 @@ from .configuration_qwen2_5_omni import (
     Qwen2_5OmniVisionEncoderConfig,
 )
 
-# from ...modeling_flash_attention_utils import flash_attn_supports_top_left_mask, is_flash_attn_available
-# if is_flash_attn_2_available():
-#     from flash_attn.flash_attn_interface import flash_attn_varlen_func as flash_attn_varlen_func
-#     from flash_attn.layers.rotary import apply_rotary_emb
-# else:
-# flash_attn_varlen_func = None
-# apply_rotary_emb = None
-# if is_flash_attn_available():
-#     from ...modeling_flash_attention_utils import _flash_attention_forward
-
 if is_flash_attn_2_available:
-    # from mindspore.ops.operations.nn_ops import FlashAttentionScore as MSFlashAttention
-    from ...mindspore_adapter import FlashAttention2 as MSFlashAttention
+    from mindspore.ops.operations.nn_ops import FlashAttentionScore as MSFlashAttention
 
 from ...mindspore_adapter import dtype_to_min, scaled_dot_product_attention
 from ...mindspore_adapter.utils import _MIN_FP16
@@ -605,16 +594,12 @@ class Qwen2_5OmniAudioFlashAttention2(Qwen2_5OmniAudioAttention):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # flash_attn<2.1 generates top-left aligned causal mask, while what is needed here is bottom-right alignement, that was made default for flash_attn>=2.1. This attribute is used to handle this difference. Reference: https://github.com/Dao-AILab/flash-attention/releases/tag/v2.1.0.
-        # Beware that with flash_attn<2.1, using q_seqlen != k_seqlen (except for the case q_seqlen == 1) produces a wrong mask (top-left).
-        # self._flash_attn_uses_top_left_mask = not is_flash_attn_greater_or_equal_2_10()
-
+        self.fa_dtype = ms.float16
         self.flash_attention = MSFlashAttention(
-            head_dim=self.head_dim,
+            scale_value=self.head_dim**-0.5,
             head_num=self.num_heads,
-            attention_dropout=0.0,
+            keep_prob=1 - 0.0,
             input_layout="BNSD",
-            dtype=ms.float16,
         )
 
     def construct(
@@ -623,6 +608,7 @@ class Qwen2_5OmniAudioFlashAttention2(Qwen2_5OmniAudioAttention):
         cu_seqlens: Optional[ms.Tensor] = None,
     ) -> Tuple[ms.Tensor, Optional[ms.Tensor], Optional[Tuple[ms.Tensor]]]:
         seq_length, all_dim = hidden_states.shape
+        target_dtype = hidden_states.dtype
         query_states = self.q_proj(hidden_states)
         query_states = query_states.reshape(seq_length, self.num_heads, -1)
 
@@ -631,21 +617,16 @@ class Qwen2_5OmniAudioFlashAttention2(Qwen2_5OmniAudioAttention):
         value_states = self.v_proj(hidden_states)
         value_states = value_states.reshape(seq_length, self.num_heads, -1)
 
-        # max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
-        # attn_output = flash_attn_varlen_func(
-        #     query_states, key_states, value_states, cu_seqlens, cu_seqlens, max_seqlen, max_seqlen, dropout_p=0.0
-        # )
-
         # SND => BNSD
         query_states = query_states.unsqueeze(0).swapaxes(1, 2)
         key_states = key_states.unsqueeze(0).swapaxes(1, 2)
         value_states = value_states.unsqueeze(0).swapaxes(1, 2)
-        attn_output = (
-            self.flash_attention(query_states, key_states, value_states).swapaxes(1, 2).unsqueeze(0)
-        )  # BNSD => SND
+        attn_output = self.flash_attention(
+            query_states.to(self.fa_dtype), key_states.to(self.fa_dtype), value_states.to(self.fa_dtype)
+        )[3]
+        attn_output = attn_output.to(target_dtype).swapaxes(1, 2).unsqueeze(0)  # BNSD => SND
         attn_output = attn_output.reshape(seq_length, all_dim)
         attn_output = self.out_proj(attn_output)
-
         return attn_output
 
 
@@ -999,38 +980,29 @@ class Qwen2_5OmniVisionFlashAttention2(nn.Cell):
         self.v = mint.nn.Linear(dim, dim, bias=True)
         self.proj = mint.nn.Linear(dim, dim)
 
+        self.fa_dtype = ms.float16
         self.flash_attention = MSFlashAttention(
-            head_dim=self.head_dim,
+            scale_value=self.head_dim**-0.5,
             head_num=self.num_heads,
             input_layout="BNSD",
-            dtype=ms.float16,
         )
-
-    # def _apply_rotary_pos_emb_flashatt(self, tensor: ms.Tensor, freqs: ms.Tensor) -> ms.Tensor:
-    #     tensor_ = tensor.float()
-    #     cos = freqs.cos()  # .type_as(tensor_)
-    #     sin = freqs.sin()  # .type_as(tensor_)
-    #     output = apply_rotary_emb(tensor_, cos, sin).type_as(tensor)
-    #     return output
 
     def construct(self, hidden_states: ms.Tensor, cu_seqlens: ms.Tensor, rotary_pos_emb: ms.Tensor = None) -> ms.Tensor:
         seq_length = hidden_states.shape[0]
+        target_dtype = hidden_states.dtype
         q = self.q(hidden_states).reshape(seq_length, self.num_heads, -1)
         k = self.k(hidden_states).reshape(seq_length, self.num_heads, -1)
         v = self.v(hidden_states).reshape(seq_length, self.num_heads, -1)
-        # q = self._apply_rotary_pos_emb_flashatt(q.unsqueeze(0), rotary_pos_emb).squeeze(0)
-        # k = self._apply_rotary_pos_emb_flashatt(k.unsqueeze(0), rotary_pos_emb).squeeze(0)
         q = apply_rotary_pos_emb_vision(q.unsqueeze(0), rotary_pos_emb)
         k = apply_rotary_pos_emb_vision(k.unsqueeze(0), rotary_pos_emb)
 
-        # max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
-        # attn_output = flash_attn_varlen_func(q, k, v, cu_seqlens, cu_seqlens, max_seqlen, max_seqlen).reshape(
-        #     seq_length, -1
-        # )
         q = q.swapaxes(1, 2)
         k = k.swapaxes(1, 2)
         v = v.unsqueeze(0).swapaxes(1, 2)
-        attn_output = self.flash_attention(q, k, v).swapaxes(1, 2).squeeze(0).reshape(seq_length, -1)  # BNSD => SND
+        attn_output = self.flash_attention(q.to(self.fa_dtype), k.to(self.fa_dtype), v.to(self.fa_dtype))[3].to(
+            target_dtype
+        )
+        attn_output = attn_output.swapaxes(1, 2).squeeze(0).reshape(seq_length, -1)  # BNSD => SND
         attn_output = self.proj(attn_output)
         return attn_output
 
@@ -1378,7 +1350,7 @@ class Qwen2_5OmniRotaryEmbedding(nn.Cell):
             self.inv_freq = self.original_inv_freq
             self.max_seq_len_cached = self.original_max_seq_len
 
-    # @torch.no_grad()
+    # @no_grad()
     def construct(self, x, position_ids):
         if "dynamic" in self.rope_type:
             self._dynamic_frequency_update(position_ids)
@@ -1579,19 +1551,13 @@ class Qwen2_5OmniFlashAttention2(Qwen2_5OmniAttention):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-        # TODO: Should be removed once Flash Attention for RoCm is bumped to 2.1.
-        # flash_attn<2.1 generates top-left aligned causal mask, while what is needed here is bottom-right alignment, that was made default for flash_attn>=2.1. This attribute is used to handle this difference. Reference: https://github.com/Dao-AILab/flash-attention/releases/tag/v2.1.0.
-        # Beware that with flash_attn<2.1, using q_seqlen != k_seqlen (except for the case q_seqlen == 1) produces a wrong mask (top-left).
-        # self._flash_attn_uses_top_left_mask = flash_attn_supports_top_left_mask()
-
         dropout_rate = 0.0 if not self.training else self.attention_dropout
+        self.fa_dtype = ms.float16
         self.flash_attention = MSFlashAttention(
-            head_dim=self.head_dim,
+            scale_value=self.head_dim**-0.5,
             head_num=self.num_heads,
-            attention_dropout=dropout_rate,
+            keep_prob=1 - dropout_rate,
             input_layout="BNSD",
-            dtype=ms.float16,
         )
 
     def convert_mask_to_fa_format(self, attention_mask):
@@ -1622,6 +1588,7 @@ class Qwen2_5OmniFlashAttention2(Qwen2_5OmniAttention):
         position_embeddings: Optional[Tuple[ms.Tensor, ms.Tensor]] = None,  # necessary, but kept here for BC
     ):
         bsz, q_len, _ = hidden_states.shape
+        target_dtype = hidden_states.dtype
 
         query_states = self.q_proj(hidden_states)
         key_states = self.k_proj(hidden_states)
@@ -1644,7 +1611,6 @@ class Qwen2_5OmniFlashAttention2(Qwen2_5OmniAttention):
         # repeat k/v heads if n_kv_heads < n_heads
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
-        # dropout_rate = 0.0 if not self.training else self.attention_dropout
 
         # Reashape to the expected shape for Flash Attention
         query_states = query_states.swapaxes(1, 2)
@@ -1673,8 +1639,19 @@ class Qwen2_5OmniFlashAttention2(Qwen2_5OmniAttention):
         #     use_top_left_mask=self._flash_attn_uses_top_left_mask,
         # )
         attention_mask = self.convert_mask_to_fa_format(attention_mask)
-        attn_output = self.flash_attention(query_states, key_states, value_states, attention_mask)
-
+        attn_output = (
+            self.flash_attention(
+                query_states.to(self.fa_dtype),
+                key_states.to(self.fa_dtype),
+                value_states.to(self.fa_dtype),
+                None,
+                None,
+                None,
+                attention_mask,
+            )[3]
+            .to(target_dtype)
+            .swapaxes(1, 2)
+        )  # BNSD
         attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
         attn_output = self.o_proj(attn_output)
 
@@ -3591,11 +3568,11 @@ class DiTAttention(nn.Cell):
         self.to_out = nn.CellList([mint.nn.Linear(self.inner_dim, config.hidden_size), mint.nn.Dropout(config.dropout)])
 
         if self._attn_implementation == "flash_attention_2":
+            self.fa_dtype = ms.float16
             self.attention_interface = MSFlashAttention(
-                head_dim=config.head_dim,
+                scale_value=config.head_dim**-0.5,
                 head_num=self.heads,
                 input_layout="BNSD",
-                dtype=ms.float16,
             )
         elif self._attn_implementation == "sdpa" or self._attn_implementation == "eager":
             self.attention_interface = scaled_dot_product_attention
@@ -3627,15 +3604,24 @@ class DiTAttention(nn.Cell):
         cos, sin = position_embeddings
         query[:, :1], key[:, :1] = apply_rotary_pos_emb(query[:, :1], key[:, :1], cos, sin)
 
-        # TODO: remove customized attention_interface
-        # attention_interface = ALL_ATTENTION_FUNCTIONS[self._attn_implementation] # fa or sdpa
-        attention_weights = self.attention_interface(
-            query,
-            key,
-            value,
-            attn_mask=attention_mask,
-            # is_causal=False,
-        )
+        if self._attn_implementation == "flash_attention_2":
+            attention_weights = self.attention_interface(
+                query.to(self.fa_dtype),
+                key.to(self.fa_dtype),
+                value.to(self.fa_dtype),
+                None,
+                None,
+                None,
+                attention_mask,
+            )[3].to(hidden_states.dtype)
+        else:
+            attention_weights = self.attention_interface(
+                query,
+                key,
+                value,
+                attn_mask=attention_mask,
+                # is_causal=False,
+            )
         attention_weights = attention_weights.transpose(1, 2)
 
         # mask. e.g. inference got a batch with different target durations, mask out the padding
@@ -4191,7 +4177,7 @@ class Qwen2_5OmniToken2WavDiTModel(Qwen2_5OmniPreTrainedModel):
 
         return output
 
-    # @torch.no_grad()
+    # @no_grad()
     def sample(
         self,
         conditioning_vector,
@@ -4415,7 +4401,7 @@ class Qwen2_5OmniForConditionalGeneration(Qwen2_5OmniPreTrainedModel, Generation
 
         return model
 
-    # @torch.no_grad()
+    # @no_grad()
     # TODO: raushan, defaults should be saved in generation config
     def generate(
         self,

@@ -62,6 +62,7 @@ def inference(medium_path):
 # We recommend enabling flash_attention_2 for better acceleration and memory saving.
 model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
     "Qwen/Qwen2.5-Omni-7B",
+    mindspore_dtype=ms.float16,
     use_safetensors=True,
     attn_implementation="flash_attention_2",
 )

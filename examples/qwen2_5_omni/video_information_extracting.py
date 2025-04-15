@@ -24,6 +24,7 @@ def inference(video_path, prompt, sys_prompt):
                     "type": "video",
                     "video": video_path,
                     "max_pixels": 360 * 420,
+                    "fps": 1,
                 },
             ],
         },
@@ -60,7 +61,6 @@ def inference(video_path, prompt, sys_prompt):
 model_path = "Qwen/Qwen2.5-Omni-7B"
 model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
     model_path,
-    mindspore_dtype=ms.float16,
     attn_implementation="flash_attention_2",
 )
 processor = Qwen2_5OmniProcessor.from_pretrained(model_path)
