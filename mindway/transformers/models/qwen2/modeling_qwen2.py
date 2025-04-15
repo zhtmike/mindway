@@ -569,7 +569,7 @@ class Qwen2Model(Qwen2PreTrainedModel):
 
             if self.gradient_checkpointing and self.training:
                 layer_outputs = self._gradient_checkpointing_func(
-                    decoder_layer.__call__,
+                    decoder_layer,
                     hidden_states,
                     causal_mask,
                     position_ids,

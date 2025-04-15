@@ -41,7 +41,7 @@ def parse_args():
 
     parser.add_argument("--seed", default=42, type=int, help="Training seed.")
     parser.add_argument("--mode", default=1, choices=[0, 1], help="Running in GRAPH_MODE(0) or PYNATIVE_MODE(1).")
-    parser.add_argument("--jit_level", default="O1", choices=["O0", "O1"], help="Jit Level")
+    parser.add_argument("--jit_level", default="O0", choices=["O0", "O1"], help="Jit Level")
     parser.add_argument("--use_parallel", default=False, type=str2bool, help="use parallel training.")
     parser.add_argument("--max_token_length", default=1024, type=int, help="Maximum token length.")
     parser.add_argument(
@@ -57,7 +57,7 @@ def parse_args():
     parser.add_argument("--lr", default=1e-4, type=float, help="The learning rate.")
     parser.add_argument("--weight_decay", default=0.1, type=float, help="Weight decay.")
     parser.add_argument("--epochs", default=200, type=int, help="Number of total training epochs.")
-    parser.add_argument("--batch_size", default=8, type=int, help="Training batch size.")
+    parser.add_argument("--batch_size", default=16, type=int, help="Training batch size.")
     parser.add_argument("--ckpt_max_keep", default=3, type=int, help="Maximum number of checkpoints to keep.")
     parser.add_argument("--clip_grad", default=True, type=str2bool, help="Clip gradient.")
     parser.add_argument("--clip_grad_value", default=1.0, type=float, help="Clip gradient value.")
@@ -95,12 +95,13 @@ def main(args):
     if args.load_weight:
         with nn.no_init_parameters():
             model = Qwen2ForCausalLM.from_pretrained(
-                args.model_name, config=config, attn_implementation="flash_attention_2"
+                args.model_name, config=config, mindspore_dtype=ms.float32, attn_implementation="flash_attention_2"
             )
     else:
         logger.info("Initialize network randomly.")
-        model = Qwen2ForCausalLM(config, attn_implementation="flash_attention_2")
+        model = Qwen2ForCausalLM(config, mindspore_dtype=ms.float32, attn_implementation="flash_attention_2")
     model.set_train()
+    model.gradient_checkpointing_enable()
 
     if args.dtype != "fp32":
         logger.info("Using AMP with data type %s", args.dtype)
