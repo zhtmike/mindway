@@ -21,7 +21,7 @@ import numpy as np
 from mindspore import mint, nn
 
 from ...activations import ACT2FN
-from ...cache_utils import Cache, DynamicCache, StaticCache
+from ...cache_utils import Cache, DynamicCache, StaticCache, SlidingWindowCache
 from ...generation import GenerationMixin
 from ...mindspore_adapter import dtype_to_min
 from ...modeling_attn_mask_utils import AttentionMaskConverter
@@ -41,7 +41,6 @@ from transformers.utils import (
     add_code_sample_docstrings,
     add_start_docstrings,
     add_start_docstrings_to_model_forward,
-    can_return_tuple,
     logging,
     replace_return_docstrings,
 )
@@ -132,7 +131,7 @@ def repeat_kv(hidden_states: ms.Tensor, n_rep: int) -> ms.Tensor:
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+    hidden_states = hidden_states[:, :, None, :, :].broadcast_to(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 
@@ -149,7 +148,7 @@ def eager_attention_forward(
     key_states = repeat_kv(key, module.num_key_value_groups)
     value_states = repeat_kv(value, module.num_key_value_groups)
 
-    attn_weights = mint.matmul(query, key_states.transpose(2, 3)) * scaling
+    attn_weights = mint.matmul(query, key_states.swapaxes(2, 3)) * scaling
     if attention_mask is not None:
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = attn_weights + causal_mask
@@ -157,7 +156,7 @@ def eager_attention_forward(
     attn_weights = mint.nn.functional.softmax(attn_weights, dim=-1, dtype=ms.float32).to(query.dtype)
     attn_weights = mint.nn.functional.dropout(attn_weights, p=dropout, training=module.training)
     attn_output = mint.matmul(attn_weights, value_states)
-    attn_output = attn_output.transpose(1, 2).contiguous()
+    attn_output = attn_output.swapaxes(1, 2).contiguous()
 
     return attn_output, attn_weights
 
@@ -212,9 +211,9 @@ class Qwen3Attention(nn.Cell):
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
 
-        query_states = self.q_norm(self.q_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
-        key_states = self.k_norm(self.k_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
-        value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        query_states = self.q_norm(self.q_proj(hidden_states).view(hidden_shape)).swapaxes(1, 2)
+        key_states = self.k_norm(self.k_proj(hidden_states).view(hidden_shape)).swapaxes(1, 2)
+        value_states = self.v_proj(hidden_states).view(hidden_shape).swapaxes(1, 2)
 
         cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
@@ -333,11 +332,11 @@ class Qwen3RotaryEmbedding(nn.Cell):
     # fixme currently graph mode dose not dynamic_rope_update. To write a graceful if-else branch.
     # @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def construct(self, x, position_ids):
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand((position_ids.shape[0], -1, 1))
+        inv_freq_expanded = self.inv_freq[None, :, None].float().broadcast_to((position_ids.shape[0], -1, 1))
         position_ids_expanded = position_ids[:, None, :].float()
 
         # Force float32 start
-        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).swapaxes(1, 2)
         emb = mint.cat((freqs, freqs), dim=-1)
         cos = emb.cos() * self.attention_scaling
         sin = emb.sin() * self.attention_scaling
@@ -499,7 +498,8 @@ class Qwen3Model(Qwen3PreTrainedModel):
     def set_input_embeddings(self, value):
         self.embed_tokens = value
 
-    @can_return_tuple
+    # mindspore graph not support @can_return_tuple decorator
+    # @can_return_tuple
     @add_start_docstrings_to_model_forward(QWEN3_INPUTS_DOCSTRING)
     def construct(
         self,
@@ -520,7 +520,7 @@ class Qwen3Model(Qwen3PreTrainedModel):
         )
         use_cache = use_cache if use_cache is not None else self.config.use_cache
 
-        if (input_ids is None) ^ (inputs_embeds is not None):
+        if (input_ids is None) and (inputs_embeds is not None):
             raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
 
         if self.gradient_checkpointing and self.training and use_cache:
@@ -601,12 +601,8 @@ class Qwen3Model(Qwen3PreTrainedModel):
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
 
-        return BaseModelOutputWithPast(
-            last_hidden_state=hidden_states,
-            past_key_values=past_key_values if use_cache else None,
-            hidden_states=all_hidden_states,
-            attentions=all_self_attns,
-        )
+        past_key_values = past_key_values if use_cache else None
+        return hidden_states, past_key_values, all_hidden_states, all_self_attns
 
     def _update_causal_mask(
         self,
@@ -741,7 +737,7 @@ class Qwen3Model(Qwen3PreTrainedModel):
                     )
                     diagonal_attend_mask.bitwise_or(sliding_attend_mask)
             causal_mask *= diagonal_attend_mask
-            causal_mask = causal_mask[None, None, :, :].expand((batch_size, 1, -1, -1))
+            causal_mask = causal_mask[None, None, :, :].broadcast_to((batch_size, 1, -1, -1))
             if attention_mask is not None:
                 causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
                 if attention_mask.shape[-1] > target_length:
@@ -790,7 +786,7 @@ class Qwen3ForCausalLM(Qwen3PreTrainedModel, GenerationMixin):
     def get_decoder(self):
         return self.model
 
-    @can_return_tuple
+    # @can_return_tuple
     @add_start_docstrings_to_model_forward(QWEN3_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=CausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC)
     def construct(
@@ -858,7 +854,7 @@ class Qwen3ForCausalLM(Qwen3PreTrainedModel, GenerationMixin):
             **kwargs,
         )
 
-        hidden_states = outputs.last_hidden_state
+        hidden_states = outputs[0]
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
         slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
         logits = self.lm_head(hidden_states[:, slice_indices, :])
@@ -867,13 +863,9 @@ class Qwen3ForCausalLM(Qwen3PreTrainedModel, GenerationMixin):
         if labels is not None:
             loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)
 
-        return CausalLMOutputWithPast(
-            loss=loss,
-            logits=logits,
-            past_key_values=outputs.past_key_values,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-        )
+        result = (loss, logits) + outputs[1:]
+        result = tuple(v for v in result if v is not None)
+        return  result
 
 
 @add_start_docstrings(
@@ -907,7 +899,7 @@ class Qwen3ForSequenceClassification(Qwen3PreTrainedModel):
     def set_input_embeddings(self, value):
         self.model.embed_tokens = value
 
-    @can_return_tuple
+    # @can_return_tuple
     @add_start_docstrings_to_model_forward(QWEN3_INPUTS_DOCSTRING)
     def construct(
         self,
@@ -1007,7 +999,7 @@ class Qwen3ForTokenClassification(Qwen3PreTrainedModel):
     def set_input_embeddings(self, value):
         self.model.embed_tokens = value
 
-    @can_return_tuple
+    # @can_return_tuple
     @add_start_docstrings_to_model_forward(QWEN3_INPUTS_DOCSTRING)
     @add_code_sample_docstrings(
         checkpoint=_CHECKPOINT_FOR_DOC,
@@ -1083,7 +1075,7 @@ class Qwen3ForQuestionAnswering(Qwen3PreTrainedModel):
     def set_input_embeddings(self, value):
         self.transformer.embed_tokens = value
 
-    @can_return_tuple
+    # @can_return_tuple
     @add_start_docstrings_to_model_forward(QWEN3_INPUTS_DOCSTRING)
     def construct(
         self,

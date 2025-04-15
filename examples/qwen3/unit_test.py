@@ -10,8 +10,9 @@ if __name__ == "__main__":
 
     import time
 
-    ms.set_context(mode=ms.PYNATIVE_MODE, pynative_synchronize=True)
-    # ms.set_context(mode = ms.GRAPH_MODE) # NOT SUPPORTED YET
+    ms.set_context(mode=ms.PYNATIVE_MODE)
+    ms.runtime.launch_blocking()
+    # ms.set_context(mode=ms.GRAPH_MODE, jit_syntax_level=ms.STRICT) # NOT SUPPORTED YET
 
     # TEST: loading model
     start_time = time.time()

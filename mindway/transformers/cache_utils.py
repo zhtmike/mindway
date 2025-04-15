@@ -475,3 +475,9 @@ class DynamicCache(Cache):
 class EncoderDecoderCache(Cache):
     def __init__(self):
         raise NotImplementedError
+
+
+class SlidingWindowCache(Cache):
+    def __init__(self):
+        super(SlidingWindowCache, self).__init__()
+        raise NotImplementedError
