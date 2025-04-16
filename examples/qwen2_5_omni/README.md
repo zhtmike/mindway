@@ -41,11 +41,13 @@ Here are some usage chat examples and scripts with `mindway.transformers`:
 |[Universal Audio Understanding](universal_audio_understanding.py)|	Speech recongnition, speech-to-text translation and audio analysis.	|
 |[Voice Chatting](voice_chatting.py)	| Chatting with Qwen2.5-Omni by voice input and output.	|
 |[Video Information Extracting](video_information_extracting.py)	| Obtaining information from the video stream. |
+[Multi Round Omni Chatting](multi_round_omni_chatting.py)	|Conducted multiple rounds of audio and video dialogues with Qwen2.5-Omni to provide the most comprehensive ability demonstration.|
+
+<!-- OOM:
+|[Screen Recording Interaction](screen_recording_interaction.py)	| Get the information and content you want to know by asking questions in real time on the recording screen.	|
 |[Omni Chatting for Music](omni_chatting_for_music.py)	| Chat with Qwen2.5-Omni about music content in a audio and video stream.|
 | [Omni Chatting for Math](omni_chatting_for_math.py)	|Chat with Qwen2.5-Omni about math content in a audio and video stream.|
-|[Multi Round Omni Chatting](multi_round_omni_chatting.py)	|Conducted multiple rounds of audio and video dialogues with Qwen2.5-Omni to provide the most comprehensive ability demonstration.|
-
-<!-- OOM: |[Screen Recording Interaction](screen_recording_interaction.py)	| Get the information and content you want to know by asking questions in real time on the recording screen.	| -->
+|-->
 
 ### Single Media inference
 
@@ -172,6 +174,7 @@ text = processor.batch_decode(text_ids, skip_special_tokens=True, clean_up_token
 print(text)
 ```
 
+<!-- may OOM
 ### Batch Mixed Media Inference
 
 The model can batch inputs composed of mixed samples of various types such as text, images, audio and videos as input when `return_audio=False` is set. Here is an example.
@@ -280,6 +283,7 @@ text = processor.batch_decode(text_ids, skip_special_tokens=True, clean_up_token
 
 print(text)
 ```
+ -->
 
 ### Usage Tips
 
@@ -356,7 +360,11 @@ Experiments are tested on ascend 910* with mindspore 2.5.0 pynative mode.
 
 |model| precision | task | resolution| FA | s/step | steps|
 |---|---|---|---|---|---|---|
-|Qwen2.5-Omni-7B| fp32 | pure text Q&A | N.A. | ON | 0.20 | 21 |
-|Qwen2.5-Omni-7B| fp32 | video VQA w/ audio| 20x280x504 | ON | 0.16 | 80 |
-|Qwen2.5-Omni-7B| fp16 | pure text Q&A | N.A. | ON | 0.22 | 21 |
-|Qwen2.5-Omni-7B| fp16 | video VQA w/ audio| 20x280x504 | ON | 0.23 | 30 |
+|Qwen2.5-Omni-7B| fp32 | pure text Q&A | N.A. | OFF | 0.20 | 21 |
+|Qwen2.5-Omni-7B| fp32 | video VQA w/ audio| 20x280x504 | OFF | 0.16 | 80 |
+|Qwen2.5-Omni-7B| bf16 | pure text Q&A | N.A. | OFF | 0.20 | 21 |
+|Qwen2.5-Omni-7B| bf16 | video VQA w/ audio| 20x280x504 | OFF | 0.20 | 89 |
+|Qwen2.5-Omni-7B| fp16 | pure text Q&A | N.A. | OFF | 0.22 | 21 |
+|Qwen2.5-Omni-7B| fp16 | video VQA w/ audio| 20x280x504 | OFF | 0.23 | 30 |
+
+*note：apply mixed precision, `Conv3d` use fp16, `AvgPool1d` uses fp32.

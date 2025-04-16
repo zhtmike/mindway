@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
-from transformers.utils import (  # is_flash_attn_2_available,; is_flash_attn_greater_or_equal_2_10,
+from transformers.utils import (
     add_start_docstrings,
     add_start_docstrings_to_model_forward,
     logging,
@@ -847,14 +847,6 @@ class Qwen2_5OmniAudioEncoder(Qwen2_5OmniPreTrainedModel):
         ).to(ms.int32)
 
         for idx, encoder_layer in enumerate(self.layers):
-            # TODO: gradient_checkpointing
-            # if self.gradient_checkpointing and self.training:
-            #     layer_outputs = self._gradient_checkpointing_func(
-            #         encoder_layer.__call__,
-            #         hidden_states,
-            #         cu_seqlens,
-            #     )
-            # else:
             layer_outputs = encoder_layer(
                 hidden_states,
                 cu_seqlens,
@@ -865,7 +857,7 @@ class Qwen2_5OmniAudioEncoder(Qwen2_5OmniPreTrainedModel):
         hidden_states_list = hidden_states.split(aftercnn_lens.tolist(), dim=0)
         token_audio_list = []
         for each_audio_states in hidden_states_list:
-            each_audio_states = self.avg_pooler(each_audio_states.swapaxes(0, 1)).swapaxes(0, 1)
+            each_audio_states = self.avg_pooler(each_audio_states.float().swapaxes(0, 1)).swapaxes(0, 1).to(hidden_states.dtype)
             each_audio_states = self.ln_post(each_audio_states)
             each_audio_states = self.proj(each_audio_states)
             token_audio_list.append(each_audio_states)
@@ -975,6 +967,7 @@ class Qwen2_5OmniVisionFlashAttention2(nn.Cell):
     def __init__(self, dim: int, num_heads: int = 16) -> None:
         super().__init__()
         self.num_heads = num_heads
+        self.head_dim = dim // num_heads
         self.q = mint.nn.Linear(dim, dim, bias=True)
         self.k = mint.nn.Linear(dim, dim, bias=True)
         self.v = mint.nn.Linear(dim, dim, bias=True)
@@ -1116,12 +1109,13 @@ class Qwen2_5_VisionPatchEmbed(nn.Cell):
         ).to_float(ms.float16)
 
     def construct(self, hidden_states: ms.Tensor) -> ms.Tensor:
+        origin_dtype = hidden_states.dtype
         target_dtype = self.proj.weight.dtype
         hidden_states = hidden_states.view(
             (-1, self.in_channels, self.temporal_patch_size, self.patch_size, self.patch_size)
         )
         hidden_states = self.proj(hidden_states.to(dtype=target_dtype)).view((-1, self.embed_dim))
-        return hidden_states
+        return hidden_states.to(origin_dtype)
 
 
 class Qwen2_5_VisionRotaryEmbedding(nn.Cell):
@@ -1298,11 +1292,6 @@ class Qwen2_5OmniVisionEncoder(Qwen2_5OmniPreTrainedModel):
                 cu_seqlens_now = cu_seqlens
             else:
                 cu_seqlens_now = cu_window_seqlens
-            # if self.gradient_checkpointing and self.training:
-            #     hidden_states = self._gradient_checkpointing_func(
-            #         blk.__call__, hidden_states, cu_seqlens_now, rotary_pos_emb
-            #     )
-            # else:
             hidden_states = blk(
                 hidden_states,
                 cu_seqlens=cu_seqlens_now,
@@ -1611,11 +1600,6 @@ class Qwen2_5OmniFlashAttention2(Qwen2_5OmniAttention):
         # repeat k/v heads if n_kv_heads < n_heads
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
-
-        # Reashape to the expected shape for Flash Attention
-        query_states = query_states.swapaxes(1, 2)
-        key_states = key_states.swapaxes(1, 2)
-        value_states = value_states.swapaxes(1, 2)
 
         # TODO: sliding window
         if (
@@ -2014,18 +1998,6 @@ class Qwen2_5OmniThinkerTextModel(Qwen2_5OmniPreTrainedModel):
         past_key_values: Cache,
         output_attentions: bool = False,
     ):
-        # if self.config._attn_implementation == "flash_attention_2":
-        #     if attention_mask is not None and past_key_values is not None:
-        #         is_padding_right = attention_mask[:, -1].sum().item() != input_tensor.shape[0]
-        #         if is_padding_right:
-        #             raise ValueError(
-        #                 "You are attempting to perform batched generation with padding_side='right'"
-        #                 " this may lead to unexpected behaviour for Flash Attention version of Qwen25OmniThinkerText. Make sure to "
-        #                 " call `tokenizer.padding_side  = 'left'` before tokenizing the input. "
-        #             )
-        #     if attention_mask is not None and 0.0 in attention_mask:
-        #         return attention_mask
-        #     return None
 
         # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument, in
         # order to dispatch on Flash Attention 2. This feature is not compatible with static cache, as SDPA will fail
@@ -2252,14 +2224,14 @@ class Qwen2_5OmniThinkerForConditionalGeneration(Qwen2_5OmniPreTrainedModelForCo
 
     def __init__(self, config: Qwen2_5OmniThinkerConfig):
         super().__init__(config)
-        config.audio_config.attn_implementation = config._attn_implementation
+        config.audio_config._attn_implementation = config._attn_implementation
         self.audio_tower = Qwen2_5OmniAudioEncoder(config.audio_config)
 
-        config.vision_config.attn_implementation = config._attn_implementation
+        config.vision_config._attn_implementation = config._attn_implementation
         self.visual = Qwen2_5OmniVisionEncoder(config.vision_config)
 
         self.vocab_size = config.text_config.vocab_size
-        config.text_config.attn_implementation = config._attn_implementation
+        config.text_config._attn_implementation = config._attn_implementation
         self.model = Qwen2_5OmniThinkerTextModel(config.text_config)
         self.lm_head = mint.nn.Linear(config.text_config.hidden_size, config.text_config.vocab_size, bias=False)
         self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
@@ -2359,7 +2331,6 @@ class Qwen2_5OmniThinkerForConditionalGeneration(Qwen2_5OmniPreTrainedModelForCo
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if feature_attention_mask is not None:
-            feature_attention_mask = feature_attention_mask.int()
             audio_feature_lengths = mint.sum(feature_attention_mask, dim=1)
             input_features = input_features.permute((0, 2, 1))[feature_attention_mask.bool()].permute((1, 0))
         else:
@@ -2412,22 +2383,22 @@ class Qwen2_5OmniThinkerForConditionalGeneration(Qwen2_5OmniPreTrainedModelForCo
                 if audio_features.shape[0] != sum(audio_output_lengths.tolist()):
                     raise ValueError("length of audio_features should match audio_output_lengths")
                 audio_mask = (input_ids == self.config.audio_token_index).unsqueeze(-1).expand_as(inputs_embeds)
-                audio_features = audio_features.to(inputs_embeds.dtype)
-                inputs_embeds = inputs_embeds.masked_scatter(audio_mask, audio_features)
+                # audio_features = audio_features.to(inputs_embeds.dtype)
+                inputs_embeds = inputs_embeds.float().masked_scatter(audio_mask, audio_features.float()).to(inputs_embeds.dtype)
 
             if pixel_values is not None:
                 pixel_values = pixel_values.type(self.visual.dtype)
                 image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
                 image_mask = (input_ids == self.config.image_token_index).unsqueeze(-1).expand_as(inputs_embeds)
                 image_embeds = image_embeds.to(inputs_embeds.dtype)
-                inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
+                inputs_embeds = inputs_embeds.float().masked_scatter(image_mask, image_embeds.float()).to(inputs_embeds.dtype)
 
             if pixel_values_videos is not None:
                 pixel_values_videos = pixel_values_videos.type(self.visual.dtype)
                 video_embeds = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
                 video_mask = (input_ids == self.config.video_token_index).unsqueeze(-1).expand_as(inputs_embeds)
                 video_embeds = video_embeds.to(inputs_embeds.dtype)
-                inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_embeds)
+                inputs_embeds = inputs_embeds.float().masked_scatter(video_mask, video_embeds.float()).to(inputs_embeds.dtype)
 
         outputs = self.model(
             attention_mask=attention_mask,
@@ -2652,19 +2623,6 @@ class Qwen2_5OmniTalkerModel(Qwen2_5OmniPreTrainedModel):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
-            # if self.gradient_checkpointing and self.training:
-            #     layer_outputs = self._gradient_checkpointing_func(
-            #         decoder_layer.__call__,
-            #         hidden_states,
-            #         causal_mask,
-            #         position_ids,
-            #         past_key_values,
-            #         output_attentions,
-            #         use_cache,
-            #         cache_position,
-            #         position_embeddings,
-            #     )
-            # else:
             layer_outputs = decoder_layer(
                 hidden_states,
                 attention_mask=causal_mask,
@@ -2709,18 +2667,6 @@ class Qwen2_5OmniTalkerModel(Qwen2_5OmniPreTrainedModel):
         past_key_values: Cache,
         output_attentions: bool = False,
     ):
-        # if self.config._attn_implementation == "flash_attention_2":
-        #     if attention_mask is not None and past_key_values is not None:
-        #         is_padding_right = attention_mask[:, -1].sum().item() != input_tensor.shape[0]
-        #         if is_padding_right:
-        #             raise ValueError(
-        #                 "You are attempting to perform batched generation with padding_side='right'"
-        #                 " this may lead to unexpected behaviour for Flash Attention version of Qwen25OmniTalker. Make sure to "
-        #                 " call `tokenizer.padding_side  = 'left'` before tokenizing the input. "
-        #             )
-        #     if attention_mask is not None and 0.0 in attention_mask:
-        #         return attention_mask
-        #     return None
 
         # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument, in
         # order to dispatch on Flash Attention 2. This feature is not compatible with static cache, as SDPA will fail
@@ -4257,9 +4203,9 @@ class Qwen2_5OmniToken2WavModel(Qwen2_5OmniPreTrainedModel):
                 "Qwen2_5OmniToken2WavModel does not support eager attention implementation, fall back to sdpa"
             )
             attn_impl = "sdpa"
-        config.dit_config.attn_implementation = attn_impl
+        config.dit_config._attn_implementation = attn_impl
         self.code2wav_dit_model = Qwen2_5OmniToken2WavDiTModel(config.dit_config)
-        config.bigvgan_config.attn_implementation = attn_impl
+        config.bigvgan_config._attn_implementation = attn_impl
         self.code2wav_bigvgan_model = Qwen2_5OmniToken2WavBigVGANModel(config.bigvgan_config)
 
     def construct(
@@ -4315,6 +4261,7 @@ class Qwen2_5OmniForConditionalGeneration(Qwen2_5OmniPreTrainedModel, Generation
     def __init__(self, config):
         super().__init__(config)
 
+        config.thinker_config._attn_implementation = config._attn_implementation
         self.thinker = Qwen2_5OmniThinkerForConditionalGeneration(config.thinker_config)
 
         self.has_talker = config.enable_audio_output
@@ -4323,6 +4270,8 @@ class Qwen2_5OmniForConditionalGeneration(Qwen2_5OmniPreTrainedModel, Generation
             self.enable_talker()
 
     def enable_talker(self):
+        self.config.thinker_config._attn_implementation = self.config._attn_implementation
+        self.config.token2wav_config._attn_implementation = self.token2wav_config._attn_implementation
         self.talker = Qwen2_5OmniTalkerForConditionalGeneration(self.config.talker_config)
         self.token2wav = Qwen2_5OmniToken2WavModel(self.config.token2wav_config)
         self.token2wav.float()
@@ -4477,8 +4426,8 @@ class Qwen2_5OmniForConditionalGeneration(Qwen2_5OmniPreTrainedModel, Generation
                 token2wav_kwargs[key[len("token2wav_") :]] = value
             # Process special input values
             elif key == "feature_attention_mask":
-                thinker_kwargs[key] = value
-                talker_kwargs["audio_feature_lengths"] = mint.sum(value, dim=1)
+                thinker_kwargs[key] = value.int()
+                talker_kwargs["audio_feature_lengths"] = mint.sum(value, dim=1).int()
             elif key == "input_features" or key == "attention_mask":
                 thinker_kwargs[key] = value
             # Put other key to shared kwargs
@@ -4561,7 +4510,7 @@ class Qwen2_5OmniForConditionalGeneration(Qwen2_5OmniPreTrainedModel, Generation
         if "attention_mask" in kwargs:
             talker_attention_mask = mint.cat(
                 [kwargs["attention_mask"], kwargs["attention_mask"].new_ones((1, 2))], dim=1
-            )
+            ).int()
 
         talker_result = self.talker.generate(
             input_ids=talker_input_ids,

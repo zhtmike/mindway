@@ -45,7 +45,7 @@ def inference(conversations):
 # We recommend enabling flash_attention_2 for better acceleration and memory saving.
 model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
     "Qwen/Qwen2.5-Omni-7B",
-    mindspore_dtype=ms.float16,
+    mindspore_dtype=ms.bfloat16,
     use_safetensors=True,
     attn_implementation="flash_attention_2",
 )
@@ -68,7 +68,7 @@ response, audio = inference(conversations)
 print(response[0])
 sf.write(
     "output_multi-round_omni_chat_1.wav",
-    response[1].reshape(-1).asnumpy(),
+    audio.reshape(-1).asnumpy(),
     samplerate=24000,
 )
 
@@ -85,7 +85,7 @@ response, audio = inference(conversations)
 print(response[0])
 sf.write(
     "output_multi-round_omni_chat_2.wav",
-    response[1].reshape(-1).asnumpy(),
+    audio.reshape(-1).asnumpy(),
     samplerate=24000,
 )
 
@@ -101,6 +101,6 @@ response, audio = inference(conversations)
 print(response[0])
 sf.write(
     "output_multi-round_omni_chat_3.wav",
-    response[1].reshape(-1).asnumpy(),
+    audio.reshape(-1).asnumpy(),
     samplerate=24000,
 )
