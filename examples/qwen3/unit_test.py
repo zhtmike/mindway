@@ -13,7 +13,7 @@ if __name__ == "__main__":
     # ms.set_context(mode=ms.PYNATIVE_MODE)
     # ms.runtime.launch_blocking()
     ms.set_context(mode=ms.GRAPH_MODE, jit_syntax_level=ms.STRICT) # NOT SUPPORTED YET
-
+    print(f"mode: {ms.get_context('mode')}, device: {ms.get_context('device_target')}")
     # TEST: loading model
     start_time = time.time()
     config = Qwen3Config(

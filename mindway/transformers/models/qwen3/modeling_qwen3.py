@@ -376,7 +376,7 @@ class Qwen3PreTrainedModel(PreTrainedModel):
     _supports_flash_attn_2 = True
     _supports_sdpa = False  # SDPA, not support yet
     _supports_flex_attn = False  # FlexAttention, not support yet
-    _supports_cache_class = True
+    _supports_cache_class = False  # this will affect the padding behavior of input id
     _supports_quantized_cache = True
     _supports_static_cache = False  # StaticCache, not used
     _supports_attention_backend = True
