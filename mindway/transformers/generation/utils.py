@@ -12,7 +12,7 @@ from transformers.utils.generic import ModelOutput
 
 import mindspore as ms
 import mindspore.numpy as mnp
-from mindspore import ops
+from mindspore import ops, mint
 
 from mindway.transformers.cache_utils import (
     Cache,
@@ -211,8 +211,11 @@ class GenerationMixin:
                 model_inputs[input_ids_key] = None
                 model_inputs["inputs_embeds"] = inputs_embeds
             else:
-                # `clone` calls in this function ensure a consistent stride. See #32227
-                model_inputs[input_ids_key] = input_ids.clone()
+                # Padding input_id to max_len when no cache
+                if past_key_values is None:
+                    pad_len = max(0, attention_mask.shape[1] - input_ids.shape[1])
+                    input_ids = mint.nn.functional.pad(input_ids, (0, pad_len), value=0)
+                model_inputs[input_ids_key] = input_ids
                 model_inputs["inputs_embeds"] = None
         else:
             model_inputs[input_ids_key] = input_ids.clone()
