@@ -22,7 +22,7 @@ import numpy as np
 from mindspore import mint, nn, Tensor
 
 from ...activations import ACT2FN
-from ...cache_utils import Cache, DynamicCache, StaticCache, SlidingWindowCache
+from ...cache_utils import Cache, DynamicCache, StaticCache, SlidingWindowCache, get_seq_length, update
 from ...integrations.page_attention import PageAttention
 from ...mindspore_adapter import str_to_dtype
 from ...mindspore_adapter.block_tables import BlockTables
@@ -231,7 +231,8 @@ class Qwen3Attention(nn.Cell):
                 cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
                 key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
             elif isinstance(past_key_value, tuple):
-                raise NotImplementedError
+                key_states, value_states = update(past_key_value, key_states, value_states, cache_position)
+                past_key_value = (key_states, value_states)
 
         attention_interface: Callable = eager_attention_forward
         if self.config._attn_implementation != "eager":
@@ -257,7 +258,7 @@ class Qwen3Attention(nn.Cell):
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
-        return attn_output, attn_weights
+        return attn_output, attn_weights, past_key_value
 
 
 class Qwen3PageAttention(PageAttention):
@@ -323,7 +324,7 @@ class Qwen3DecoderLayer(nn.Cell):
                     "batch_valid_length": batch_valid_length,
                 }
             )
-        hidden_states, self_attn_weights = self.self_attn(
+        hidden_states, self_attn_weights, next_cache = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -345,6 +346,9 @@ class Qwen3DecoderLayer(nn.Cell):
         outputs = (hidden_states,)
         if output_attentions:
             outputs += (self_attn_weights,)
+
+        if use_cache:
+            outputs += (next_cache,)
 
         return outputs
 
@@ -572,10 +576,6 @@ class Qwen3Model(Qwen3PreTrainedModel):
             )
             use_cache = False
 
-        # TODO (joao): remove this exception in v4.56 -- it exists for users that try to pass a legacy cache
-        if not isinstance(past_key_values, (type(None), Cache)):
-            raise ValueError("The `past_key_values` should be either a `Cache` object or `None`.")
-
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
 
@@ -583,7 +583,7 @@ class Qwen3Model(Qwen3PreTrainedModel):
             past_key_values = DynamicCache()
 
         if cache_position is None:
-            past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+            past_seen_tokens = get_seq_length(past_key_values) if past_key_values is not None else 0
             cache_position = mint.arange(
                 past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1]
             )
@@ -605,18 +605,20 @@ class Qwen3Model(Qwen3PreTrainedModel):
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
+        next_caches = () if use_cache else None
 
-        for decoder_layer in self.layers[: self.config.num_hidden_layers]:
+        for idx, decoder_layer in enumerate(self.layers[: self.config.num_hidden_layers]):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
+            past_key_value = past_key_values[idx] if past_key_values is not None else None
             if self.gradient_checkpointing and self.training:
                 layer_outputs = self._gradient_checkpointing_func(
                     partial(decoder_layer.__call__, **flash_attn_kwargs),
                     hidden_states,
                     causal_mask,
                     position_ids,
-                    past_key_values,
+                    past_key_value,
                     output_attentions,
                     use_cache,
                     cache_position,
@@ -627,7 +629,7 @@ class Qwen3Model(Qwen3PreTrainedModel):
                     hidden_states,
                     attention_mask=causal_mask,
                     position_ids=position_ids,
-                    past_key_value=past_key_values,
+                    past_key_value=past_key_value,
                     output_attentions=output_attentions,
                     use_cache=use_cache,
                     cache_position=cache_position,
@@ -642,6 +644,9 @@ class Qwen3Model(Qwen3PreTrainedModel):
 
             hidden_states = layer_outputs[0]
 
+            if use_cache:
+                next_caches += (layer_outputs[2 if output_attentions else 1],)
+
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
 
@@ -651,8 +656,7 @@ class Qwen3Model(Qwen3PreTrainedModel):
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
 
-        past_key_values = past_key_values if use_cache else None
-        return hidden_states, past_key_values, all_hidden_states, all_self_attns
+        return hidden_states, next_caches, all_hidden_states, all_self_attns
 
     def _update_causal_mask(
         self,
@@ -678,7 +682,7 @@ class Qwen3Model(Qwen3PreTrainedModel):
         # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument, in
         # order to dispatch on Flash Attention 2. This feature is not compatible with static cache, as SDPA will fail
         # to infer the attention mask.
-        past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+        past_seen_tokens = get_seq_length(past_key_values) if past_key_values is not None else 0
         using_static_cache = isinstance(past_key_values, StaticCache)
         # using_sliding_window_cache = isinstance(past_key_values, SlidingWindowCache)
         using_sliding_window_cache = False
