@@ -29,10 +29,16 @@ def flash_attention_forward(
         logger.warning(
             "Softcap is not supported in Mindspore yet. Ignore it."
         )
+
     # This is before the transpose
-    seq_len = query.shape[2]  # BNSD, N: num_head, S: seq_len, D: head_dim
     num_head = query.shape[1]
-    input_layout = "BNSD"
+    seq_len = query.shape[2]  # BNSD, N: num_head, S: seq_len, D: head_dim
+
+    # BNSD -> BSND
+    query = query.swapaxes(1, 2)
+    key = key.swapaxes(1, 2)
+    value = value.swapaxes(1, 2)
+    input_layout = "BSND"
 
     # In MindSpore, False indicates retention and True indicates discard, Which is opposite to PyTorch
     seq_len_key = key.shape[2]

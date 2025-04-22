@@ -1,3 +1,5 @@
+import random
+
 import mindspore as ms
 from mindspore import JitConfig
 import numpy as np
@@ -10,6 +12,9 @@ if __name__ == "__main__":
     # Debug and testing use only
 
     import time
+    ms.set_seed(0)
+    random.seed(0)
+    np.random.seed(0)
 
     # ms.set_context(mode=ms.PYNATIVE_MODE)
     # ms.runtime.launch_blocking()
@@ -20,7 +25,7 @@ if __name__ == "__main__":
     config = Qwen3Config(
         num_hidden_layers=1,
         use_cache=False,
-        attn_implementation="paged_attention",  # paged_attention flash_attention_2
+        attn_implementation="paged_attention",  # paged_attention flash_attention_2 eager
         sliding_window=None,
     )
     config.mindspore_dtype = "float16"

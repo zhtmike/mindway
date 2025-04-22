@@ -15,6 +15,7 @@ from . import (
     phi3,
     qwen2_5_vl,
     qwen2_vl,
+    qwen3,
     speecht5,
     t5,
     umt5,
