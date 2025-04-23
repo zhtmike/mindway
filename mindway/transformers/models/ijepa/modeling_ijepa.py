@@ -4,6 +4,8 @@ from typing import Callable, Dict, List, Optional, Set, Tuple, Union
 import mindspore as ms
 from mindspore import mint, nn
 
+from transformers.models.ijepa.configuration_ijepa import IJepaConfig
+
 from ...activations import ACT2FN
 from ...mindspore_adapter import scaled_dot_product_attention
 from ...mindspore_utils import find_pruneable_heads_and_indices, prune_linear_layer
@@ -13,7 +15,6 @@ from ...utils import (  # add_code_sample_docstrings,; add_start_docstrings,; ad
     logging,
     mindspore_int,
 )
-from .configuration_ijepa import IJepaConfig
 
 logger = logging.get_logger(__name__)
 
@@ -191,7 +192,7 @@ def eager_attention_construct(
     attn_weights = mint.matmul(query, mint.transpose(key, -1, -2)) * scaling
 
     # Normalize the attention scores to probabilities.
-    attn_weights = mint.nn.functional.softmax(attn_weights, axis=-1, dtype=ms.float32).to(query.dtype)
+    attn_weights = mint.nn.functional.softmax(attn_weights, dim=-1, dtype=ms.float32).to(query.dtype)
 
     # This is actually dropping out entire tokens to attend to, which might
     # seem a bit unusual, but is taken from the original Transformer paper.
