@@ -19,15 +19,36 @@ def flash_attention_forward(
     softcap: Optional[float] = None,  # a
     **kwargs,
 ) -> Tuple[ms.Tensor, None]:
+    """
+    Flash attention forward function. This function is a wrapper for `flash_attention_score` in MindSpore. It is used
+    to calculate the attention score of the query and key, and then apply the attention score to the value.
+    Args:
+        module (`ms.Cell``):
+            The attention module to be applied to the attention score.
+        query (`ms.Tensor`):
+            The query tensor of shape `(batch_size, num_head, seq_length, head_dim)`.
+        key (`ms.Tensor`):
+            The key tensor of shape `(batch_size, num_head, seq_length, head_dim)`.
+        value (`ms.Tensor`):
+            The value tensor of shape `(batch_size, num_head, seq_length, head_dim)`.
+        attention_mask (`ms.Tensor`):
+            The attention mask tensor of bool or uint8. For each element, 0/False indicates discard and 1/True
+            indicates retention.The shape is `(batch_size, num_head, seq_length, head_dim)`. Default to `None`, which
+            means no attention mask is applied.
+        sliding_window (`int`):
+            The sliding window size of self-attention. Default to `None`.
+        softcap (`float`, *optional*):
+            Softcap for the attention logits, used e.g. in gemma2. Default to `None`.
+
+    """
 
     if sliding_window is not None:
         raise NotImplementedError(
-            "Sliding window is not supported in Mindspore yet. Please use `sliding_window=None`."
+            "Sliding window is not supported in Mindspore yet. Please set `sliding_window=None`."
         )
     if softcap is not None:
-        softcap = None
-        logger.warning(
-            "Softcap is not supported in Mindspore yet. Ignore it."
+        raise NotImplementedError(
+            "Softcap is not supported in Mindspore yet. Please set `softcap=None`."
         )
 
     # This is before the transpose
@@ -40,7 +61,8 @@ def flash_attention_forward(
     value = value.swapaxes(1, 2)
     input_layout = "BSND"
 
-    # In MindSpore, False indicates retention and True indicates discard, Which is opposite to PyTorch
+    # For `attn_mask` of ops.flash_attention_score, False indicates retention and True indicates discard, Which is
+    # opposite to PyTorch
     seq_len_key = key.shape[2]
     if attention_mask is not None:
         attention_mask = mint.logical_not(attention_mask) if attention_mask.dtype == ms.bool_ else attention_mask.bool()

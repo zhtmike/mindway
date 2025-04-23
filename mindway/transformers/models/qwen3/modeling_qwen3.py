@@ -23,12 +23,10 @@ from mindspore import mint, nn, Tensor
 
 from ...activations import ACT2FN
 from ...cache_utils import Cache, DynamicCache, StaticCache, SlidingWindowCache, get_seq_length, update
-from ...integrations.page_attention import PageAttention
 from ...mindspore_adapter import str_to_dtype
-from ...mindspore_adapter.block_tables import BlockTables
-from ...mindspore_adapter.freqs import FreqsMgr
-from ...mindspore_adapter.infer_attention import InferAttention
-from ...mindspore_adapter.mask import LowerTriangularMaskWithDynamic
+from ...mindspore_adapter.paged_attention_freqs import FreqsMgr
+from ...mindspore_adapter.paged_attention_infer_attention_block import InferAttention
+from ...mindspore_adapter.paged_attention_mask import LowerTriangularMaskWithDynamic
 from ...generation import GenerationMixin
 from ...mindspore_adapter import dtype_to_min
 from ...modeling_attn_mask_utils import AttentionMaskConverter
@@ -261,8 +259,74 @@ class Qwen3Attention(nn.Cell):
         return attn_output, attn_weights, past_key_value
 
 
-class Qwen3PageAttention(PageAttention):
-    pass
+class Qwen3PageAttention(Qwen3Attention):
+    """
+    Qwen3 page attention module
+    """
+    def __init__(self, config: Qwen3Config, layer_idx: Optional[int] = None):
+        super().__init__(config, layer_idx)
+        compute_dtype = str_to_dtype(config.mindspore_dtype)
+
+        self.infer_attention = InferAttention(
+            config.num_attention_heads,
+            config.hidden_size // config.num_attention_heads,
+            config.num_key_value_heads,
+            seq_length=config.max_position_embeddings,
+            pa_n_head_split=config.num_attention_heads,
+            pa_n_kv_head_split=config.hidden_size // config.num_attention_heads,
+            scale_value=1.0 / (math.sqrt(config.hidden_size // config.num_attention_heads)),
+            pre_tokens=2147483647,
+            next_tokens=0,
+            block_size=32,
+            num_blocks=1024,
+            is_dynamic=True,
+            use_flash_attention=True,
+            rotary_cos_format=2,
+            compute_dtype=compute_dtype,
+        )
+
+        self.is_first_iteration = True
+
+    def construct(
+        self,
+        hidden_states: ms.Tensor,
+        attention_mask: Optional[ms.Tensor] = None,
+        position_ids: Optional[ms.Tensor] = None,
+        past_key_value: Optional[tuple[ms.Tensor, ms.Tensor]] = None,
+        output_attentions: bool = False,
+        use_cache: bool = False,
+        cache_position: Optional[ms.Tensor] = None,
+        block_tables: Optional[ms.Tensor] = None,
+        slot_mapping: Optional[ms.Tensor] = None,
+        freqs_cis: Optional[ms.Tensor] = None,
+        mask: Optional[ms.Tensor] = None,
+        batch_valid_length: Optional[ms.Tensor] = None,
+        **kwargs,
+    ):
+        bs, seq_len, hidden_dim = hidden_states.shape
+        num_head = hidden_dim // self.head_dim
+        bsnd_shape = (bs, seq_len, num_head, self.head_dim)
+        bsh_shape = (bs, seq_len, hidden_dim)
+
+        query_states = self.q_norm(self.q_proj(hidden_states).view(bsnd_shape)).view(bsh_shape)
+        key_states = self.q_norm(self.k_proj(hidden_states).view(bsnd_shape)).view(bsh_shape)
+        value_states = self.v_proj(hidden_states)
+
+        attn_output = self.infer_attention(
+            query_states,
+            key_states,
+            value_states,
+            batch_valid_length,
+            block_tables,
+            slot_mapping,
+            freqs_cis,
+            mask,
+            q_seq_lens=None,
+        )
+
+        attn_output = self.o_proj(attn_output)
+
+        return attn_output, None, past_key_value
 
 
 QWEN3_ATTENTION_CLASSES = {
