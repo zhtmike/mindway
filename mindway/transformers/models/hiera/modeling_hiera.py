@@ -32,7 +32,7 @@ from ...utils import (  # add_code_sample_docstrings,; add_start_docstrings,; ad
     mindspore_int,
 )
 from ...utils.backbone_utils import BackboneMixin
-from .configuration_hiera import HieraConfig
+from transformers.models.hiera.configuration_hiera import HieraConfig
 
 logger = logging.get_logger(__name__)
 
