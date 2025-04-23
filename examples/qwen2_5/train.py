@@ -5,6 +5,8 @@ import sys
 import time
 from typing import Tuple
 
+import numpy as np
+from tqdm import tqdm
 from transformers import Qwen2Config
 
 import mindspore as ms
@@ -13,7 +15,7 @@ import mindspore.nn as nn
 import mindspore.ops as ops
 from mindspore.amp import auto_mixed_precision
 from mindspore.communication import get_group_size, get_rank, init
-from mindspore.dataset import GeneratorDataset
+from mindspore.dataset import DictIterator, GeneratorDataset
 
 # TODO: remove in future when mindway is ready for install
 __dir__ = os.path.dirname(os.path.abspath(__file__))
@@ -61,6 +63,7 @@ def parse_args():
     parser.add_argument("--ckpt_max_keep", default=3, type=int, help="Maximum number of checkpoints to keep.")
     parser.add_argument("--clip_grad", default=True, type=str2bool, help="Clip gradient.")
     parser.add_argument("--clip_grad_value", default=1.0, type=float, help="Clip gradient value.")
+    parser.add_argument("--val_interval", default=100, type=int, help="Valiation interval.")
     args = parser.parse_args()
     return args
 
@@ -79,6 +82,19 @@ def init_env(args) -> Tuple[int, int]:
         device_num, rank_id = 1, 0
 
     return device_num, rank_id
+
+
+def validate(model: nn.Cell, data_iterator: DictIterator) -> float:
+    model.set_train(False)
+    avg_loss = []
+
+    for step, data in tqdm(enumerate(data_iterator), desc="validate"):
+        loss = model(**data).loss.item()
+        avg_loss.append(loss)
+
+    avg_loss = np.mean(avg_loss).item()
+    model.set_train(True)
+    return avg_loss
 
 
 def main(args):
@@ -110,10 +126,17 @@ def main(args):
 
     # prepare dataset
     logger.info("Creating dataset `%s`", args.dataset_name)
-    dataset = TextQADataset(args.dataset_name, max_token_length=args.max_token_length, tokenizer_name=args.model_name)
-    logger.info("Number of records: %d", len(dataset))
-    data_generator = GeneratorDataset(
-        dataset,
+    train_dataset = TextQADataset(
+        args.dataset_name, max_token_length=args.max_token_length, tokenizer_name=args.model_name, split="train"
+    )
+    logger.info("Number of training records: %d", len(train_dataset))
+    val_dataset = TextQADataset(
+        args.dataset_name, max_token_length=args.max_token_length, tokenizer_name=args.model_name, split="test"
+    )
+    logger.info("Number of validation records: %d", len(val_dataset))
+
+    train_data_generator = GeneratorDataset(
+        train_dataset,
         column_names=["input_ids", "labels", "attention_mask"],
         column_types=[ms.int64, ms.int64, ms.bool_],
         shuffle=True,
@@ -121,7 +144,16 @@ def main(args):
         num_shards=device_num,
         shard_id=rank_id,
     )
-    data_generator = data_generator.batch(args.batch_size, drop_remainder=True, num_parallel_workers=2)
+    train_data_generator = train_data_generator.batch(args.batch_size, drop_remainder=True, num_parallel_workers=2)
+
+    val_data_generator = GeneratorDataset(
+        train_dataset,
+        column_names=["input_ids", "labels", "attention_mask"],
+        column_types=[ms.int64, ms.int64, ms.bool_],
+        shuffle=False,
+        num_parallel_workers=4,
+    )
+    val_data_generator = val_data_generator.batch(args.batch_size, drop_remainder=False, num_parallel_workers=2)
 
     if args.optim == "adamw":
         optimizer = mint.optim.AdamW(model.trainable_params(), lr=args.lr, weight_decay=args.weight_decay)
@@ -134,14 +166,17 @@ def main(args):
     grad_fn = ms.value_and_grad(forward_fn, None, optimizer.parameters)
     reduce_func = nn.DistributedGradReducer(optimizer.parameters) if args.use_parallel else lambda x: x
 
-    ds_iter = data_generator.create_dict_iterator(num_epochs=-1)
+    train_data_iterator = train_data_generator.create_dict_iterator()
+    val_data_iterator = val_data_generator.create_dict_iterator()
     ckpt_dir = os.path.join(args.output_path, "ckpt")
     if not os.path.isdir(ckpt_dir):
         os.mkdir(ckpt_dir)
 
     logger.info("Start training...")
+    global_step = 0
     for epoch in range(1, args.epochs + 1):
-        for step, data in enumerate(ds_iter):
+        for step, data in enumerate(train_data_iterator):
+            global_step += 1
             start_time_s = time.time()
             loss, grads = grad_fn(**data)
             grads = reduce_func(grads)
@@ -156,6 +191,10 @@ def main(args):
                 loss.item(),
                 step_time * 1000,
             )
+            if rank_id == 0 and global_step % args.val_interval == 0:
+                val_loss = validate(model, val_data_iterator)
+                logger.info("validation loss: %.8f", val_loss)
+
         ckpt_name = os.path.join(ckpt_dir, "last.ckpt")
         # FIXME: somehow the prefix of the parameter names are dropped after value_and_grad
         # here we just manually fix them

@@ -1,6 +1,6 @@
 import logging
 import random
-from typing import Optional, Tuple, Union
+from typing import Literal, Optional, Tuple, Union
 
 import numpy as np
 from datasets import load_dataset
@@ -16,12 +16,16 @@ class TextQADataset:
         max_token_length: int = 1024,
         ignore_index: int = -100,
         tokenizer_name: str = "Qwen/Qwen2.5-0.5B-Instruct",
+        split: Literal["train", "test"] = "train",
+        test_size: float = 0.1,
     ) -> None:
         if dataset_name.lower().endswith("pubmed_qa"):
             self.dataset = load_dataset(dataset_name, "pqa_labeled", split="train")
+            self.dataset = self.dataset.train_test_split(test_size=test_size, shuffle=False)[split]
             self._dataset_name = "pubmed_qa"
         elif dataset_name.lower().endswith("openorca"):
             self.dataset = load_dataset(dataset_name, split="train")
+            self.dataset = self.dataset.train_test_split(test_size=test_size, shuffle=False)[split]
             self._dataset_name = "openorca"
         else:
             raise NotImplementedError
