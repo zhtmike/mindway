@@ -32,7 +32,7 @@ from ...modeling_utils import MSPreTrainedModel
 from ...utils import (  # add_code_sample_docstrings,; add_start_docstrings,; add_start_docstrings_to_model_forward,
     logging,
 )
-from .configuration_levit import LevitConfig
+from transformers.models.levit.configuration_levit import LevitConfig
 
 logger = logging.get_logger(__name__)
 

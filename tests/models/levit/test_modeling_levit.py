@@ -12,7 +12,8 @@ from tests.modeling_test_utils import compute_diffs, generalized_parse_args, get
 from tests.models.modeling_common import floats_numpy, ids_numpy
 from transformers import LevitConfig
 
-DTYPE_AND_THRESHOLDS = {"fp32": 5e-4}
+# fp16 NaN
+DTYPE_AND_THRESHOLDS = {"fp32": 5e-4, "bf16": 5e-3}
 MODES = [1]
 
 logging.basicConfig(level=logging.INFO)
