@@ -1,7 +1,6 @@
 import importlib
 import itertools
 import logging
-from typing import List, Tuple, Union
 
 import numpy as np
 import torch
@@ -261,7 +260,7 @@ def generalized_parse_args(pt_dtype, ms_dtype, *args, **kwargs):
     return pt_inputs_args, pt_inputs_kwargs, ms_inputs_args, ms_inputs_kwargs
 
 
-def compute_diffs(pt_outputs: Union[torch.Tensor, Tuple, List, BaseModelOutput], ms_outputs: ms.Tensor):
+def compute_diffs(pt_outputs: list[torch.Tensor, tuple, list, BaseModelOutput], ms_outputs: ms.Tensor):
     if isinstance(pt_outputs, BaseModelOutput):
         pt_outputs = tuple(pt_outputs.last_hidden_state)
     elif not isinstance(pt_outputs, (tuple, list)):

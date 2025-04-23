@@ -27,7 +27,7 @@ from ...modeling_utils import MSPreTrainedModel
 from ...utils import (  # add_code_sample_docstrings,; add_start_docstrings,; add_start_docstrings_to_model_forward,; replace_return_docstrings,
     logging,
 )
-from .configuration_glpn import GLPNConfig
+from transformers.models.glpn.configuration_glpn import GLPNConfig
 
 logger = logging.get_logger(__name__)
 
