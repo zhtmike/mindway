@@ -20,7 +20,7 @@ from ...modeling_utils import MSPreTrainedModel
 from ...utils import (  # add_start_docstrings,; add_start_docstrings_to_model_forward,; replace_return_docstrings,
     logging,
 )
-from .configuration_imagegpt import ImageGPTConfig
+from transformers.models.imagegpt.configuration_imagegpt import ImageGPTConfig
 
 logger = logging.get_logger(__name__)
 
