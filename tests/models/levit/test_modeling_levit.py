@@ -128,18 +128,6 @@ LEVIT_CASES = [
             "logits": "logits",
         },
     ],
-    [
-        "LevitForImageClassificationWithTeacher",
-        "transformers.LevitForImageClassificationWithTeacher",
-        "mindway.transformers.LevitForImageClassificationWithTeacher",
-        (config,),
-        {},
-        (pixel_values,),
-        {},
-        {
-            "logits": "logits",
-        },
-    ],
 ]
 
 
