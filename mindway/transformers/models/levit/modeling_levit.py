@@ -305,13 +305,6 @@ class LevitResidualLayer(nn.Cell):
         self.drop_rate = drop_rate
 
     def construct(self, hidden_state):
-        # TODO: modified it
-        # if self.training and self.drop_rate > 0:
-        #     rnd = torch.rand(hidden_state.size(0), 1, 1, device=hidden_state.device)
-        #     rnd = rnd.ge_(self.drop_rate).div(1 - self.drop_rate).detach()
-        #     hidden_state = hidden_state + self.module(hidden_state) * rnd
-        #     return hidden_state
-        # else:
         hidden_state = hidden_state + self.module(hidden_state)
         return hidden_state
 
@@ -473,8 +466,8 @@ class LevitPreTrainedModel(MSPreTrainedModel):
 
 
 LEVIT_START_DOCSTRING = r"""
-    This model is a Mindspore [mindspore.nn.Cell](https://pytorch.org/docs/stable/nn.html#torch.nn.Module) subclass. Use it
-    as a regular PyTorch Module and refer to the PyTorch documentation for all matter related to general usage and
+    This model is a Mindspore Cell subclass. Use it
+    as a regular Mindspore Module and refer to the Mindspore documentation for all matter related to general usage and
     behavior.
 
     Parameters:
@@ -485,7 +478,7 @@ LEVIT_START_DOCSTRING = r"""
 
 LEVIT_INPUTS_DOCSTRING = r"""
     Args:
-        pixel_values (`torch.FloatTensor` of shape `(batch_size, num_channels, height, width)`):
+        pixel_values (`ms.Tensor` of shape `(batch_size, num_channels, height, width)`):
             Pixel values. Pixel values can be obtained using [`AutoImageProcessor`]. See
             [`LevitImageProcessor.__call__`] for details.
 
