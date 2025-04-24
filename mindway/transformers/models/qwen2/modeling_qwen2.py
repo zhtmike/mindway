@@ -22,17 +22,15 @@
 import math
 from typing import List, Optional, Tuple, Union
 
-import numpy as np
 from transformers import Qwen2Config, logging
 
 import mindspore as ms
-import mindspore.mint.nn.functional as F
 from mindspore import Parameter, Tensor, mint, nn, ops
 from mindspore.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
 from mindway.transformers.cache_utils import Cache, DynamicCache, StaticCache
+from mindway.transformers.generation import GenerationMixin
 from mindway.transformers.mindspore_adapter import str_to_dtype
-from mindway.transformers.mindspore_adapter.block_tables import BlockTables
 from mindway.transformers.mindspore_adapter.freqs import FreqsMgr
 from mindway.transformers.mindspore_adapter.infer_attention import InferAttention
 from mindway.transformers.mindspore_adapter.mask import LowerTriangularMaskWithDynamic
@@ -357,6 +355,7 @@ class Qwen2Attention(nn.Cell):
 
         return attn_output, attn_weights, past_key_value
 
+
 class Qwen2PageAttention(Qwen2Attention):
     """
     Llama flash attention module. This module inherits from `LlamaAttention` as the weights of the module stays
@@ -427,10 +426,7 @@ class Qwen2PageAttention(Qwen2Attention):
         return attn_output, None, past_key_value
 
 
-QWEN2_ATTENTION_CLASSES = {
-    "eager": Qwen2Attention,
-    "paged_attention": Qwen2PageAttention
-}
+QWEN2_ATTENTION_CLASSES = {"eager": Qwen2Attention, "paged_attention": Qwen2PageAttention}
 
 
 class Qwen2DecoderLayer(nn.Cell):
@@ -899,7 +895,7 @@ class Qwen2Model(Qwen2PreTrainedModel):
         logger.info(f"{self.__class__.__name__}: enable recompute.")
 
 
-class Qwen2ForCausalLM(Qwen2PreTrainedModel):
+class Qwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
     _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config):
@@ -955,15 +951,6 @@ class Qwen2ForCausalLM(Qwen2PreTrainedModel):
 
     def get_decoder(self):
         return self.model
-
-    def add_flags_custom(self, is_first_iteration):
-        """Add customized attributes for specific cells in the model."""
-        self.add_flags(is_first_iteration=is_first_iteration)
-        self.model.add_flags(is_first_iteration=is_first_iteration)
-        for layer in self.model.layers:
-            layer.add_flags(is_first_iteration=is_first_iteration)
-            layer.self_attn.infer_attention.add_flags(is_first_iteration=is_first_iteration)
-            layer.self_attn.infer_attention.paged_attention_mgr.add_flags(is_first_iteration=is_first_iteration)
 
     def enable_dynamic_shape(self):
         input_ids = Tensor(shape=[None, None], dtype=ms.int32)
@@ -1103,139 +1090,6 @@ class Qwen2ForCausalLM(Qwen2PreTrainedModel):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-
-    # Copied from transformers.models.llama.modeling_llama.LlamaForCausalLM.prepare_inputs_for_generation
-    def prepare_inputs_for_generation(
-        self,
-        input_ids,
-        past_key_values=None,
-        attention_mask=None,
-        inputs_embeds=None,
-        cache_position=None,
-        position_ids=None,
-        use_cache=True,
-        **kwargs,
-    ):
-        # If we have cache: let's slice `input_ids` through `cache_position`, to keep only the unprocessed tokens
-        # Exception 1: when passing input_embeds, input_ids may be missing entries
-        # Exception 2: some generation methods do special slicing of input_ids, so we don't need to do it here
-        # FIXME generation scling method
-        if past_key_values is not None:
-            # if inputs_embeds is not None and input_ids is None:  # Exception 1
-            #     # input_ids = input_ids[:, -cache_position.shape[0]:]
-            #     input_ids = input_ids
-            # elif input_ids.shape[1] != cache_position.shape[0]:  # Default case (the "else", a no op, is Exception 2)
-            #     input_ids = input_ids[:, :cache_position.shape[0]]
-            if inputs_embeds is not None:  # Exception 1
-                if 0 not in input_ids.shape:
-                    input_ids = input_ids[:, -cache_position.shape[0] :]
-            elif input_ids.shape[1] != cache_position.shape[0]:  # Default case (the "else", a no op, is Exception 2)
-                input_ids = ops.index_select(input_ids, -1, cache_position)
-
-        if attention_mask is not None and position_ids is None:
-            # create position_ids on the fly for batch generation
-            position_ids = attention_mask.to(ms.int32).cumsum(-1) - 1  # FIXME
-            position_ids = position_ids.masked_fill(attention_mask == 0, 1)
-            if past_key_values:
-                position_ids = position_ids[:, -input_ids.shape[1] :]
-
-                # This `clone` call is needed to avoid recapturing cuda graphs with
-                # `torch.compile`'s  `mode="reduce-overhead`, as otherwise the input `position_ids` would have various stride
-                # during the decoding. Here, simply using `.contiguous()` is not sufficient as in the batch size = 1 case,
-                # `position_ids` is already contiguous but with varying stride which retriggers a capture.
-                position_ids = position_ids
-
-        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
-        if inputs_embeds is not None and cache_position[0] == 0:
-            model_inputs = {"inputs_embeds": inputs_embeds}
-        else:
-            # Padding to max_len when no cache
-            if past_key_values is None:
-                pad_len = max(0, attention_mask.shape[1] - input_ids.shape[1])
-                input_ids = F.pad(input_ids, (0, pad_len), value=0)
-
-            model_inputs = {"input_ids": input_ids}
-
-        if isinstance(past_key_values, StaticCache) and attention_mask.ndim == 2:
-            if inputs_embeds is not None:
-                batch_size, sequence_length = inputs_embeds.shape
-                device = None
-            else:
-                batch_size, sequence_length = input_ids.shape
-                device = None
-
-            dtype = self.lm_head.weight.dtype
-            min_dtype = dtype_to_min(dtype)
-
-            attention_mask = _prepare_4d_causal_attention_mask_with_cache_position(
-                attention_mask,
-                sequence_length=sequence_length,
-                target_length=past_key_values.get_max_length(),
-                dtype=dtype,
-                device=device,
-                min_dtype=min_dtype,
-                cache_position=cache_position,
-                batch_size=batch_size,
-            )
-
-        model_inputs.update(
-            {
-                "position_ids": position_ids,
-                "cache_position": cache_position,
-                "past_key_values": past_key_values,
-                "use_cache": use_cache,
-                "attention_mask": attention_mask,
-            }
-        )
-        if self.config._attn_implementation == "paged_attention":
-            bs, seq_len = input_ids.shape
-            step = kwargs["step"]
-            if step == 0:
-                self.enable_dynamic_shape()
-
-                # init block tables
-                self.block_mgr = BlockTables(1024, 32, self.config.max_position_embeddings)
-                self.block_mgr.init_cache_engine(bs)
-
-                # get slot mapping and block tables
-                max_input_length = self.config.max_position_embeddings
-                self.valid_length_each_example = ms.tensor(seq_len).reshape(bs)
-                block_tables, slot_mapping = self.block_mgr.assemble_pa_full_inputs(
-                    max_input_length, self.valid_length_each_example, [False]
-                )
-                slot_mapping = np.delete(slot_mapping, np.where(slot_mapping == -1))
-
-                # set batch valid length
-                self.batch_valid_length = ms.tensor(seq_len).to(ms.int32).reshape(bs)
-
-                self.phase = "prefill"
-                self.add_flags_custom(True)
-            else:
-                model_inputs.update({"input_ids": input_ids[:, -1].reshape(bs, 1)})
-
-                # get slot mapping and block tables
-                self.valid_length_each_example += 1
-                block_tables, slot_mapping = self.block_mgr.assemble_pa_inc_inputs(
-                    self.valid_length_each_example, [False]
-                )
-
-                # set batch valid length
-                self.batch_valid_length += 1
-
-                if step == 1:
-                    self.phase = "increment"
-                    self.add_flags_custom(False)
-            slot_mapping = ms.tensor(slot_mapping)
-            block_tables = ms.tensor(block_tables)
-            model_inputs.update(
-                {
-                    "block_tables": block_tables,
-                    "slot_mapping": slot_mapping,
-                    "batch_valid_length": self.batch_valid_length,
-                }
-            )
-
-        return model_inputs
 
     # FIXME
     def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None):
