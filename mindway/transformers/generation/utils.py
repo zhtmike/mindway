@@ -5,6 +5,7 @@ import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
+import numpy as np
 from transformers import logging
 from transformers.generation.configuration_utils import GenerationConfig, GenerationMode
 from transformers.tokenization_utils import ExtensionsTrie
@@ -12,15 +13,16 @@ from transformers.utils.generic import ModelOutput
 
 import mindspore as ms
 import mindspore.numpy as mnp
-from mindspore import ops, mint
+from mindspore import mint, ops
 
 from mindway.transformers.cache_utils import (
     Cache,
     DynamicCache,
     EncoderDecoderCache,
+    StaticCache,
     get_seq_length,
     init_static_cache,
-    reset, StaticCache,
+    reset,
 )
 from mindway.transformers.generation.logits_process import (
     LogitNormalization,
@@ -40,6 +42,7 @@ from mindway.transformers.generation.stopping_criteria import (
     StoppingCriteria,
     StoppingCriteriaList,
 )
+from mindway.transformers.mindspore_adapter.paged_attention_block_tables import BlockTables
 from mindway.transformers.mindspore_adapter.select_operator import get_multinomial_op
 from mindway.transformers.modeling_outputs import CausalLMOutputWithPast
 
@@ -154,13 +157,13 @@ GenerateNonBeamOutput = Union[GenerateDecoderOnlyOutput, GenerateEncoderDecoderO
 
 class GenerationMixin:
     def prepare_inputs_for_generation(
-            self,
-            input_ids,
-            past_key_values: Union[Cache, Tuple]=None,
-            attention_mask: Optional[ms.Tensor]=None,
-            inputs_embeds: Optional[ms.Tensor]=None,
-            cache_position: Optional[ms.Tensor]=None,
-            **kwargs,
+        self,
+        input_ids,
+        past_key_values: Union[Cache, Tuple] = None,
+        attention_mask: Optional[ms.Tensor] = None,
+        inputs_embeds: Optional[ms.Tensor] = None,
+        cache_position: Optional[ms.Tensor] = None,
+        **kwargs,
     ):
         """
         Prepare the model inputs for generation. In includes operations like computing the 4D attention mask or
@@ -182,6 +185,9 @@ class GenerationMixin:
             past_length = get_seq_length(past_key_values) if past_key_values is not None else 0
             cache_position = ops.arange(past_length, input_ids.shape[1], dtype=ms.int32)
 
+        if kwargs["use_cache"]:
+            model_inputs["cache_position"] = cache_position
+
         # 2. Generic cache-dependent input preparation
         # If we have cache: let's slice `input_ids` through `cache_position`, to keep only the unprocessed tokens
         # Exception 1: when passing input_embeds, input_ids may be missing entries
@@ -191,14 +197,12 @@ class GenerationMixin:
         # generate the first token for each sequence. Later use the generated Input ids for continuation.
         if past_key_values is not None:
             # Make sure `past_key_values` is mutable (required for graph mode to work faster)
-            model_inputs["past_key_values"] = ms.mutable(past_key_values) if isinstance(past_key_values, tuple) \
-                else past_key_values
+            model_inputs["past_key_values"] = (
+                ms.mutable(past_key_values) if isinstance(past_key_values, tuple) else past_key_values
+            )
             if inputs_embeds is not None and input_ids.shape[1] == 0:  # Exception 4
                 inputs_embeds = inputs_embeds[:, -cache_position.shape[0] :]
-            elif (
-                inputs_embeds is not None  # Exception 1
-                or cache_position[-1] >= input_ids.shape[1]  # Exception 3
-            ):
+            elif inputs_embeds is not None or cache_position[-1] >= input_ids.shape[1]:  # Exception 1  # Exception 3
                 input_ids = input_ids[:, -cache_position.shape[0] :]
             elif input_ids.shape[1] != cache_position.shape[0]:  # Default case (the "else", a no op, is Exception 2)
                 input_ids = input_ids[:, cache_position]
@@ -249,13 +253,12 @@ class GenerationMixin:
                         model_inputs["inputs_embeds"].shape[1]
                         if model_inputs.get("inputs_embeds") is not None
                         else model_inputs[input_ids_key].shape[1]
-
                     )
                     if attention_mask is not None:
                         # since attention_mask maybe padded,
                         # it's safer to use the valid length instead of the total length
                         cur_len = attention_mask.sum(-1).max()
-                        model_input = model_input[:, cur_len-current_input_length: cur_len]
+                        model_input = model_input[:, cur_len - current_input_length : cur_len]
                     else:
                         model_input = model_input[:, -current_input_length:]
                     model_input = model_input.clone()
@@ -292,7 +295,7 @@ class GenerationMixin:
                     sequence_length=sequence_length,
                     target_length=past_key_values.get_max_cache_shape(),
                     cache_position=cache_position,
-                    batch_size=batch_size
+                    batch_size=batch_size,
                 )
         if attention_mask is not None:
             model_inputs[attention_mask_key] = attention_mask
@@ -308,7 +311,66 @@ class GenerationMixin:
         # 8. Remove unexpected `generate` inputs (TODO @joao: fix trainer and examples)
         model_inputs.pop("labels", None)
 
+        # Paged Attention
+        if self.config._attn_implementation == "paged_attention":
+            bs, seq_len = input_ids.shape
+            step = kwargs["step"]
+            if step == 0:
+                self.enable_dynamic_shape()
+
+                # init block tables
+                self.block_mgr = BlockTables(1024, 32, self.config.max_position_embeddings)
+                self.block_mgr.init_cache_engine(bs)
+
+                # get slot mapping and block tables
+                max_input_length = self.config.max_position_embeddings
+                self.valid_length_each_example = ms.tensor(seq_len).reshape(bs)
+                block_tables, slot_mapping = self.block_mgr.assemble_pa_full_inputs(
+                    max_input_length, self.valid_length_each_example, [False]
+                )
+                slot_mapping = np.delete(slot_mapping, np.where(slot_mapping == -1))
+
+                # set batch valid length
+                self.batch_valid_length = ms.tensor(seq_len).to(ms.int32).reshape(bs)
+
+                self.phase = "prefill"
+                self._add_flags_custom(True)
+            else:
+                model_inputs.update({"input_ids": input_ids[:, -1].reshape(bs, 1)})
+
+                # get slot mapping and block tables
+                self.valid_length_each_example += 1
+                block_tables, slot_mapping = self.block_mgr.assemble_pa_inc_inputs(
+                    self.valid_length_each_example, [False]
+                )
+
+                # set batch valid length
+                self.batch_valid_length += 1
+
+                if step == 1:
+                    self.phase = "increment"
+                    self._add_flags_custom(False)
+            slot_mapping = ms.tensor(slot_mapping)
+            block_tables = ms.tensor(block_tables)
+            model_inputs.update(
+                {
+                    "block_tables": block_tables,
+                    "slot_mapping": slot_mapping,
+                    "batch_valid_length": self.batch_valid_length,
+                }
+            )
+            model_inputs.pop("step", None)
+
         return model_inputs
+
+    def _add_flags_custom(self, is_first_iteration):
+        """Add customized attributes for specific cells in the model."""
+        self.add_flags(is_first_iteration=is_first_iteration)
+        self.model.add_flags(is_first_iteration=is_first_iteration)
+        for layer in self.model.layers:
+            layer.add_flags(is_first_iteration=is_first_iteration)
+            layer.self_attn.infer_attention.add_flags(is_first_iteration=is_first_iteration)
+            layer.self_attn.infer_attention.paged_attention_mgr.add_flags(is_first_iteration=is_first_iteration)
 
     def _prepare_generation_config(
         self, generation_config: Optional[GenerationConfig], **kwargs: Dict
@@ -1042,7 +1104,9 @@ class GenerationMixin:
             if "attention_mask" in model_kwargs:
                 attention_mask = model_kwargs["attention_mask"]
 
-                if not self._supports_default_dynamic_cache():  # use tuple cache
+                if (
+                    not self._supports_default_dynamic_cache() and self.config._attn_implementation != "paged_attention"
+                ):  # use tuple cache
                     cur_lens = attention_mask.sum(-1)
                     for batch_idx in range(attention_mask.shape[0]):
                         cur_len = int(cur_lens[batch_idx])
@@ -1844,8 +1908,8 @@ class GenerationMixin:
                 model_kwargs["encoder_outputs"].get("hidden_states") if output_hidden_states else None
             )
 
-        # Padding inputs to avoid dynamic shape on MindSpore 2.3.1
-        if not self._supports_default_dynamic_cache():  # if tuple cache
+        # Padding inputs to avoid dynamic shape/ adapt to paged_attention
+        if not self._supports_default_dynamic_cache() and self.config._attn_implementation != "paged_attention":  # if tuple cache
             (
                 padded_input_ids,
                 padded_inputs_embeds,
@@ -1882,6 +1946,8 @@ class GenerationMixin:
 
         while self._has_unfinished_sequences(this_peer_finished, synced_gpus):
             # prepare model inputs
+            if self.config._attn_implementation == "paged_attention":
+                model_kwargs["step"] = step
             model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
 
             # forward pass to get next token
