@@ -32,17 +32,17 @@ cd examples/qwen3
 Here is a usage example of inference script:
 
 ```python
-import mindspore as ms
+import mindspore
 from mindspore import JitConfig
 from transformers import AutoTokenizer
 from mindway.transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
-ms.set_context(mode=ms.GRAPH_MODE, jit_syntax_level=ms.STRICT)
+mindspore.set_context(mode=mindspore.GRAPH_MODE, jit_syntax_level=mindspore.STRICT)
 
 # load model
 model_name = "Qwen/Qwen3-0.6B" # or replace the local path here
 model = Qwen3ForCausalLM.from_pretrained(
     model_name,
-    mindspore_dtype=ms.bfloat16,
+    mindspore_dtype=mindspore.bfloat16,
     attn_implementation="paged_attention",
 )
 
@@ -59,8 +59,8 @@ print("Successfully loaded Qwen3ForCausalLM")
 
 
 # prepare inputs
-text = "the secret to baking a really good cake is"
-input_ids = ms.Tensor(tokenizer([text], return_tensors="np").input_ids, ms.int32)
+prompt = "the secret to baking a really good cake is"
+input_ids = mindspore.tensor(tokenizer([prompt], return_tensors="np").input_ids, mindspore.int32)
 model_inputs = {}
 model_inputs["input_ids"] = input_ids
 
@@ -81,6 +81,6 @@ For convienience, you can use the following command:
 
 ```bash
 python generate.py \
-    --model_name "Qwen/Qwen3-0.6B" \
-    --input_text "the secret to baking a really good cake is"
+    --model_name "Qwen/Qwen3-0.6B-Base" \
+    --prompt "the secret to baking a really good cake is"
 ```

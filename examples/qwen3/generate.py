@@ -27,7 +27,7 @@ def generate(args):
 
 
     # prepare inputs
-    input_ids = ms.Tensor(tokenizer([args.input_text], return_tensors="np").input_ids, ms.int32)
+    input_ids = ms.Tensor(tokenizer([args.prompt], return_tensors="np").input_ids, ms.int32)
     model_inputs = {}
     model_inputs["input_ids"] = input_ids
 
@@ -47,8 +47,8 @@ def generate(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="qwen3 demo.")
 
-    parser.add_argument("--input_text", type=str, default="the secret to baking a really good cake is", required=True)
-    parser.add_argument("--model_path", type=str, default="Qwen/Qwen3-0.6B", help="Path to the pre-trained model.")
+    parser.add_argument("--prompt", type=str, default="the secret to baking a really good cake is", required=True)
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-0.6B-Base", help="Path to the pre-trained model.")
     parser.add_argument("--attn_implementation", type=str, default="paged_attention", choices=["paged_attention", "flash_attentions_2", "eager"])
 
     # Parse the arguments
