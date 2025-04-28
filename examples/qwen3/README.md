@@ -21,7 +21,7 @@ Besides that, Qwen3 apply normalization in each head. Finally, shared postion em
 
 ### Installation:
 ```
-git clone https://github.com/wcrzlh/mindway.git
+git clone https://github.com/mindspore-lab/mindway.git
 cd mindway
 pip install -e .
 cd examples/qwen3
@@ -59,12 +59,7 @@ print("Successfully loaded Qwen3ForCausalLM")
 
 
 # prepare inputs
-prompt = "Give me a short introduction to large language model."
-messages = [
-    {"role": "system", "content": "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."},
-    {"role": "user", "content": prompt},
-]
-text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+text = "the secret to baking a really good cake is"
 input_ids = ms.Tensor(tokenizer([text], return_tensors="np").input_ids, ms.int32)
 model_inputs = {}
 model_inputs["input_ids"] = input_ids
@@ -87,5 +82,5 @@ For convienience, you can use the following command:
 ```bash
 python generate.py \
     --model_name "Qwen/Qwen3-0.6B" \
-    --prompt "Give me a short introduction to large language model."
+    --input_text "the secret to baking a really good cake is"
 ```

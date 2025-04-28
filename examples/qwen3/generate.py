@@ -27,13 +27,7 @@ def generate(args):
 
 
     # prepare inputs
-    prompt = "Give me a short introduction to large language model."
-    messages = [
-        {"role": "system", "content": "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."},
-        {"role": "user", "content": prompt},
-    ]
-    text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    input_ids = ms.Tensor(tokenizer([text], return_tensors="np").input_ids, ms.int32)
+    input_ids = ms.Tensor(tokenizer([args.input_text], return_tensors="np").input_ids, ms.int32)
     model_inputs = {}
     model_inputs["input_ids"] = input_ids
 
@@ -53,7 +47,7 @@ def generate(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="qwen3 demo.")
 
-    parser.add_argument("--prompt", type=str, required=True)
+    parser.add_argument("--input_text", type=str, default="the secret to baking a really good cake is", required=True)
     parser.add_argument("--model_path", type=str, default="Qwen/Qwen3-0.6B", help="Path to the pre-trained model.")
     parser.add_argument("--attn_implementation", type=str, default="paged_attention", choices=["paged_attention", "flash_attentions_2", "eager"])
 
