@@ -84,3 +84,15 @@ python generate.py \
     --model_name "Qwen/Qwen3-0.6B-Base" \
     --prompt "the secret to baking a really good cake is"
 ```
+
+## Inference Speed
+|model name	| precision* | cards | page attn |	tokens/s	|
+| :---: | :---:  |:---:  | :---:  |:---:  |
+| qwen3-0.6B-base |  bf16 | 1 | ✅  | 20.33 |
+| qwen3-0.6B-0424 |  bf16 | 1 | ✅  | 21.13 |
+| qwen3-1.7B-base |  bf16 | 1 | ✅  | 21.23 |
+| qwen3-0.6B-0424 |  bf16 | 1 | ✅  | 22.85 |
+| qwen3-4B-base |  bf16 | 1 | ✅  | 22.24 |
+| qwen3-4B-0426 |  bf16 | 1 | ✅  | 19.92 |
+| qwen3-8B-base |  bf16 | 1 | ✅  | 19.48 |
+| qwen3-8B-0424 |  bf16 | 1 | ✅  | 19.12 |
