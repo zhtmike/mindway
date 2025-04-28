@@ -13,15 +13,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 from functools import partial
 from typing import Callable, Optional, Tuple, Union
 
 import mindspore as ms
 import numpy as np
-from mindspore import mint, nn
+from mindspore import mint, nn, Tensor
 
 from ...activations import ACT2FN
-from ...cache_utils import Cache, DynamicCache, StaticCache, SlidingWindowCache
+from ...cache_utils import Cache, DynamicCache, StaticCache, SlidingWindowCache, get_seq_length, update
+from ...mindspore_adapter import str_to_dtype
+from ...mindspore_adapter.paged_attention_freqs import FreqsMgr
+from ...mindspore_adapter.paged_attention_infer_attention_block import InferAttention
+from ...mindspore_adapter.paged_attention_mask import LowerTriangularMaskWithDynamic
 from ...generation import GenerationMixin
 from ...mindspore_adapter import dtype_to_min
 from ...modeling_attn_mask_utils import AttentionMaskConverter
@@ -79,9 +84,9 @@ class Qwen3MLP(nn.Cell):
         self.config = config
         self.hidden_size = config.hidden_size
         self.intermediate_size = config.intermediate_size
-        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
-        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
-        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
+        self.gate_proj = nn.Dense(self.hidden_size, self.intermediate_size, has_bias=False)
+        self.up_proj = nn.Dense(self.hidden_size, self.intermediate_size, has_bias=False)
+        self.down_proj = nn.Dense(self.intermediate_size, self.hidden_size, has_bias=False)
         self.act_fn = ACT2FN[config.hidden_act]
 
     def construct(self, x):
@@ -131,7 +136,7 @@ def repeat_kv(hidden_states: ms.Tensor, n_rep: int) -> ms.Tensor:
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].broadcast_to(batch, num_key_value_heads, n_rep, slen, head_dim)
+    hidden_states = hidden_states[:, :, None, :, :].broadcast_to((batch, num_key_value_heads, n_rep, slen, head_dim))
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 
@@ -174,17 +179,17 @@ class Qwen3Attention(nn.Cell):
         self.attention_dropout = config.attention_dropout
         self.is_causal = True
 
-        self.q_proj = nn.Linear(
-            config.hidden_size, config.num_attention_heads * self.head_dim, bias=config.attention_bias
+        self.q_proj = nn.Dense(
+            config.hidden_size, config.num_attention_heads * self.head_dim, has_bias=config.attention_bias
         )
-        self.k_proj = nn.Linear(
-            config.hidden_size, config.num_key_value_heads * self.head_dim, bias=config.attention_bias
+        self.k_proj = nn.Dense(
+            config.hidden_size, config.num_key_value_heads * self.head_dim, has_bias=config.attention_bias
         )
-        self.v_proj = nn.Linear(
-            config.hidden_size, config.num_key_value_heads * self.head_dim, bias=config.attention_bias
+        self.v_proj = nn.Dense(
+            config.hidden_size, config.num_key_value_heads * self.head_dim, has_bias=config.attention_bias
         )
-        self.o_proj = nn.Linear(
-            config.num_attention_heads * self.head_dim, config.hidden_size, bias=config.attention_bias
+        self.o_proj = nn.Dense(
+            config.num_attention_heads * self.head_dim, config.hidden_size, has_bias=config.attention_bias
         )
         self.q_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)  # unlike olmo, only on the head dim!
         self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)  # thus post q_norm does not need reshape
@@ -224,7 +229,8 @@ class Qwen3Attention(nn.Cell):
                 cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
                 key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
             elif isinstance(past_key_value, tuple):
-                raise NotImplementedError
+                key_states, value_states = update(past_key_value, key_states, value_states, cache_position)
+                past_key_value = (key_states, value_states)
 
         attention_interface: Callable = eager_attention_forward
         if self.config._attn_implementation != "eager":
@@ -250,14 +256,91 @@ class Qwen3Attention(nn.Cell):
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
-        return attn_output, attn_weights
+        return attn_output, attn_weights, past_key_value
+
+
+class Qwen3PageAttention(Qwen3Attention):
+    """
+    Qwen3 page attention module
+    """
+    def __init__(self, config: Qwen3Config, layer_idx: Optional[int] = None):
+        super().__init__(config, layer_idx)
+        compute_dtype = str_to_dtype(config.mindspore_dtype)
+
+        self.infer_attention = InferAttention(
+            config.num_attention_heads,
+            config.hidden_size // config.num_attention_heads,
+            config.num_key_value_heads,
+            seq_length=config.max_position_embeddings,
+            pa_n_head_split=config.num_attention_heads,
+            pa_n_kv_head_split=config.hidden_size // config.num_attention_heads,
+            scale_value=1.0 / (math.sqrt(config.hidden_size // config.num_attention_heads)),
+            pre_tokens=2147483647,
+            next_tokens=0,
+            block_size=32,
+            num_blocks=1024,
+            is_dynamic=True,
+            use_flash_attention=True,
+            rotary_cos_format=2,
+            compute_dtype=compute_dtype,
+        )
+
+        self.is_first_iteration = True
+
+    def construct(
+        self,
+        hidden_states: ms.Tensor,
+        attention_mask: Optional[ms.Tensor] = None,
+        position_ids: Optional[ms.Tensor] = None,
+        past_key_value: Optional[tuple[ms.Tensor, ms.Tensor]] = None,
+        output_attentions: bool = False,
+        use_cache: bool = False,
+        cache_position: Optional[ms.Tensor] = None,
+        block_tables: Optional[ms.Tensor] = None,
+        slot_mapping: Optional[ms.Tensor] = None,
+        freqs_cis: Optional[ms.Tensor] = None,
+        mask: Optional[ms.Tensor] = None,
+        batch_valid_length: Optional[ms.Tensor] = None,
+        **kwargs,
+    ):
+        bs, seq_len, hidden_dim = hidden_states.shape
+        num_head = hidden_dim // self.head_dim
+        bsnd_shape = (bs, seq_len, num_head, self.head_dim)
+        bsh_shape = (bs, seq_len, hidden_dim)
+
+        query_states = self.q_norm(self.q_proj(hidden_states).view(bsnd_shape)).view(bsh_shape)
+        key_states = self.q_norm(self.k_proj(hidden_states).view(bsnd_shape)).view(bsh_shape)
+        value_states = self.v_proj(hidden_states)
+
+        attn_output = self.infer_attention(
+            query_states,
+            key_states,
+            value_states,
+            batch_valid_length,
+            block_tables,
+            slot_mapping,
+            freqs_cis,
+            mask,
+            q_seq_lens=None,
+        )
+
+        attn_output = self.o_proj(attn_output)
+
+        return attn_output, None, past_key_value
+
+
+QWEN3_ATTENTION_CLASSES = {
+    "eager": Qwen3Attention,
+    "flash_attention_2": Qwen3Attention,  # fa and eager share project, norm and rope
+    "paged_attention": Qwen3PageAttention,
+}
 
 
 class Qwen3DecoderLayer(nn.Cell):
     def __init__(self, config: Qwen3Config, layer_idx: int):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.self_attn = Qwen3Attention(config=config, layer_idx=layer_idx)
+        self.self_attn = QWEN3_ATTENTION_CLASSES[config._attn_implementation](config=config, layer_idx=layer_idx)
         self.mlp = Qwen3MLP(config)
         self.input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -269,6 +352,9 @@ class Qwen3DecoderLayer(nn.Cell):
                 "unexpected results may be encountered."
             )
 
+        self.is_first_iteration = True
+
+
     def construct(
         self,
         hidden_states: ms.Tensor,
@@ -279,6 +365,11 @@ class Qwen3DecoderLayer(nn.Cell):
         use_cache: Optional[bool] = False,
         cache_position: Optional[ms.Tensor] = None,
         position_embeddings: Optional[Tuple[ms.Tensor, ms.Tensor]] = None,  # necessary, but kept here for BC
+        block_tables: Optional[ms.Tensor] = None,
+        slot_mapping: Optional[ms.Tensor] = None,
+        freqs_cis: Optional[ms.Tensor] = None,
+        mask: Optional[ms.Tensor] = None,
+        batch_valid_length: Optional[ms.Tensor] = None,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[ms.Tensor, Optional[Tuple[ms.Tensor, ms.Tensor]]]:
         residual = hidden_states
@@ -286,7 +377,18 @@ class Qwen3DecoderLayer(nn.Cell):
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
-        hidden_states, self_attn_weights = self.self_attn(
+        is_page_attention = block_tables is not None
+        if is_page_attention:
+            kwargs.update(
+                {
+                    "block_tables": block_tables,
+                    "slot_mapping": slot_mapping,
+                    "freqs_cis": freqs_cis,
+                    "mask": mask,
+                    "batch_valid_length": batch_valid_length,
+                }
+            )
+        hidden_states, self_attn_weights, next_cache = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -308,6 +410,9 @@ class Qwen3DecoderLayer(nn.Cell):
         outputs = (hidden_states,)
         if output_attentions:
             outputs += (self_attn_weights,)
+
+        if use_cache:
+            outputs += (next_cache,)
 
         return outputs
 
@@ -386,7 +491,7 @@ class Qwen3PreTrainedModel(PreTrainedModel):
             return
 
         std = self.config.initializer_range
-        if isinstance(module, nn.Linear):
+        if isinstance(module, nn.Dense):
             module.weight.data.normal_(mean=0.0, std=std)
             if module.bias is not None:
                 module.bias.data.zero_()
@@ -488,6 +593,7 @@ class Qwen3Model(Qwen3PreTrainedModel):
         self.norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rotary_emb = Qwen3RotaryEmbedding(config=config)
         self.gradient_checkpointing = False
+        self.is_first_iteration = True
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -512,6 +618,11 @@ class Qwen3Model(Qwen3PreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         cache_position: Optional[ms.Tensor] = None,
+        block_tables: Optional[ms.Tensor] = None,
+        slot_mapping: Optional[ms.Tensor] = None,
+        freqs_cis: Optional[ms.Tensor] = None,
+        mask: Optional[ms.Tensor] = None,
+        batch_valid_length: Optional[ms.Tensor] = None,
         **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
     ) -> BaseModelOutputWithPast:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -529,10 +640,6 @@ class Qwen3Model(Qwen3PreTrainedModel):
             )
             use_cache = False
 
-        # TODO (joao): remove this exception in v4.56 -- it exists for users that try to pass a legacy cache
-        if not isinstance(past_key_values, (type(None), Cache)):
-            raise ValueError("The `past_key_values` should be either a `Cache` object or `None`.")
-
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
 
@@ -540,7 +647,7 @@ class Qwen3Model(Qwen3PreTrainedModel):
             past_key_values = DynamicCache()
 
         if cache_position is None:
-            past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+            past_seen_tokens = get_seq_length(past_key_values) if past_key_values is not None else 0
             cache_position = mint.arange(
                 past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1]
             )
@@ -548,9 +655,11 @@ class Qwen3Model(Qwen3PreTrainedModel):
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
 
+        is_page_attention = block_tables is not None
+        # for paged attention, casual_mask is processed in the attention layer
         causal_mask = self._update_causal_mask(
             attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
-        )
+        ) if not is_page_attention else attention_mask
 
         hidden_states = inputs_embeds
 
@@ -560,18 +669,20 @@ class Qwen3Model(Qwen3PreTrainedModel):
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
+        next_caches = () if use_cache else None
 
-        for decoder_layer in self.layers[: self.config.num_hidden_layers]:
+        for idx, decoder_layer in enumerate(self.layers[: self.config.num_hidden_layers]):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
+            past_key_value = past_key_values[idx] if past_key_values is not None else None
             if self.gradient_checkpointing and self.training:
                 layer_outputs = self._gradient_checkpointing_func(
                     partial(decoder_layer.__call__, **flash_attn_kwargs),
                     hidden_states,
                     causal_mask,
                     position_ids,
-                    past_key_values,
+                    past_key_value,
                     output_attentions,
                     use_cache,
                     cache_position,
@@ -582,15 +693,23 @@ class Qwen3Model(Qwen3PreTrainedModel):
                     hidden_states,
                     attention_mask=causal_mask,
                     position_ids=position_ids,
-                    past_key_value=past_key_values,
+                    past_key_value=past_key_value,
                     output_attentions=output_attentions,
                     use_cache=use_cache,
                     cache_position=cache_position,
                     position_embeddings=position_embeddings,
+                    block_tables=block_tables,
+                    slot_mapping=slot_mapping,
+                    freqs_cis=freqs_cis,
+                    mask=mask,
+                    batch_valid_length=batch_valid_length,
                     **flash_attn_kwargs,
                 )
 
             hidden_states = layer_outputs[0]
+
+            if use_cache:
+                next_caches += (layer_outputs[2 if output_attentions else 1],)
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
@@ -601,8 +720,7 @@ class Qwen3Model(Qwen3PreTrainedModel):
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
 
-        past_key_values = past_key_values if use_cache else None
-        return hidden_states, past_key_values, all_hidden_states, all_self_attns
+        return hidden_states, next_caches, all_hidden_states, all_self_attns
 
     def _update_causal_mask(
         self,
@@ -628,7 +746,7 @@ class Qwen3Model(Qwen3PreTrainedModel):
         # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument, in
         # order to dispatch on Flash Attention 2. This feature is not compatible with static cache, as SDPA will fail
         # to infer the attention mask.
-        past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+        past_seen_tokens = get_seq_length(past_key_values) if past_key_values is not None else 0
         using_static_cache = isinstance(past_key_values, StaticCache)
         # using_sliding_window_cache = isinstance(past_key_values, SlidingWindowCache)
         using_sliding_window_cache = False
@@ -763,7 +881,34 @@ class Qwen3ForCausalLM(Qwen3PreTrainedModel, GenerationMixin):
         super().__init__(config)
         self.model = Qwen3Model(config)
         self.vocab_size = config.vocab_size
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.lm_head = nn.Dense(config.hidden_size, config.vocab_size, has_bias=False)
+
+        if self.config._attn_implementation == "paged_attention":
+            compute_dtype = str_to_dtype(config.mindspore_dtype)
+
+            self.freqs_mgr = FreqsMgr(
+                head_dim=config.hidden_size // config.num_attention_heads,
+                seq_length=config.max_position_embeddings,
+                max_position_embedding=config.max_position_embeddings,
+                rotary_dtype=compute_dtype,
+                theta=config.rope_theta,
+                is_dynamic=True,
+            )
+
+            self.casual_mask = LowerTriangularMaskWithDynamic(
+                seq_length=config.max_position_embeddings,
+                batch_size=1,
+                compute_type=compute_dtype,
+                is_dynamic=True,
+                pad_token_id=config.pad_token_id,
+                use_flash_attention=True,
+                use_attn_mask_compression=False,
+                use_past=True,
+                seq_split_num=1,
+                chunk_prefill=False,
+            )
+
+            self.is_first_iteration = True
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -786,6 +931,38 @@ class Qwen3ForCausalLM(Qwen3PreTrainedModel, GenerationMixin):
     def get_decoder(self):
         return self.model
 
+    def enable_dynamic_shape(self):
+        input_ids = Tensor(shape=[None, None], dtype=ms.int32)
+        position_ids = Tensor(shape=[None, None], dtype=ms.int32)
+        attention_mask = Tensor(shape=[None, None], dtype=ms.int32)
+        past_key_values = None
+        inputs_embeds = None
+        labels = None
+        use_cache = False
+        output_attentions = False
+        output_hidden_states = False
+        cache_position = None
+        block_tables = Tensor(shape=[None, None], dtype=ms.int32)
+        slot_mapping = Tensor(shape=[None], dtype=ms.int32)
+        batch_valid_length = ms.mutable(Tensor(shape=[None], dtype=ms.int32))
+        logits_to_keep = 0
+
+        self.set_inputs(
+            input_ids,
+            attention_mask,
+            position_ids,
+            past_key_values,
+            inputs_embeds,
+            labels,
+            use_cache,
+            output_attentions,
+            output_hidden_states,
+            cache_position,
+            block_tables,
+            slot_mapping,
+            batch_valid_length,
+            logits_to_keep,
+        )
     # @can_return_tuple
     @add_start_docstrings_to_model_forward(QWEN3_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=CausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC)
@@ -801,6 +978,9 @@ class Qwen3ForCausalLM(Qwen3PreTrainedModel, GenerationMixin):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         cache_position: Optional[ms.Tensor] = None,
+        block_tables: Optional[ms.Tensor] = None,
+        slot_mapping: Optional[ms.Tensor] = None,
+        batch_valid_length: Optional[ms.Tensor] = None,
         logits_to_keep: Union[int, ms.Tensor] = 0,
         **kwargs: Unpack[KwargsForCausalLM],
     ) -> CausalLMOutputWithPast:
@@ -835,6 +1015,25 @@ class Qwen3ForCausalLM(Qwen3PreTrainedModel, GenerationMixin):
         >>> tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
         "Hey, are you conscious? Can you talk to me?\nI'm not conscious, but I can talk to you."
         ```"""
+        is_page_attention = block_tables is not None
+        if is_page_attention:
+            bs, seq_len = input_ids.shape
+            mask = None
+            if self.is_first_iteration:
+                freqs_cis = self.freqs_mgr.prefill(bs, seq_len)
+                mask = self.casual_mask.prefill()
+            else:
+                freqs_cis = self.freqs_mgr.increment(batch_valid_length)
+            kwargs.update(
+                {
+                    "block_tables": block_tables,
+                    "slot_mapping": slot_mapping,
+                    "freqs_cis": freqs_cis,
+                    "mask": mask,
+                    "batch_valid_length": batch_valid_length,
+                }
+            )
+
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -888,7 +1087,7 @@ class Qwen3ForSequenceClassification(Qwen3PreTrainedModel):
         super().__init__(config)
         self.num_labels = config.num_labels
         self.model = Qwen3Model(config)
-        self.score = nn.Linear(config.hidden_size, self.num_labels, bias=False)
+        self.score = nn.Dense(config.hidden_size, self.num_labels, has_bias=False)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -988,7 +1187,7 @@ class Qwen3ForTokenClassification(Qwen3PreTrainedModel):
         else:
             classifier_dropout = 0.1
         self.dropout = nn.Dropout(classifier_dropout)
-        self.score = nn.Linear(config.hidden_size, config.num_labels)
+        self.score = nn.Dense(config.hidden_size, config.num_labels)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1064,7 +1263,7 @@ class Qwen3ForQuestionAnswering(Qwen3PreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.transformer = Qwen3Model(config)
-        self.qa_outputs = nn.Linear(config.hidden_size, 2)
+        self.qa_outputs = nn.Dense(config.hidden_size, 2)
 
         # Initialize weights and apply final processing
         self.post_init()
