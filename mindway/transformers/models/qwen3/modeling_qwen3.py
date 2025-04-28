@@ -266,15 +266,17 @@ class Qwen3PageAttention(Qwen3Attention):
     def __init__(self, config: Qwen3Config, layer_idx: Optional[int] = None):
         super().__init__(config, layer_idx)
         compute_dtype = str_to_dtype(config.mindspore_dtype)
+        self.num_attention_heads = config.num_attention_heads
+        self.num_key_value_heads = config.num_key_value_heads
 
         self.infer_attention = InferAttention(
             config.num_attention_heads,
-            config.hidden_size // config.num_attention_heads,
+            self.head_dim,
             config.num_key_value_heads,
             seq_length=config.max_position_embeddings,
             pa_n_head_split=config.num_attention_heads,
-            pa_n_kv_head_split=config.hidden_size // config.num_attention_heads,
-            scale_value=1.0 / (math.sqrt(config.hidden_size // config.num_attention_heads)),
+            pa_n_kv_head_split=self.head_dim,
+            scale_value=1.0 / (math.sqrt(self.head_dim)),
             pre_tokens=2147483647,
             next_tokens=0,
             block_size=32,
@@ -304,12 +306,14 @@ class Qwen3PageAttention(Qwen3Attention):
         **kwargs,
     ):
         bs, seq_len, hidden_dim = hidden_states.shape
-        num_head = hidden_dim // self.head_dim
-        bsnd_shape = (bs, seq_len, num_head, self.head_dim)
-        bsh_shape = (bs, seq_len, hidden_dim)
+        q_bsnd_shape = (bs, seq_len, self.num_attention_heads, self.head_dim)
+        q_bsh_shape = (bs, seq_len, self.num_attention_heads * self.head_dim)
 
-        query_states = self.q_norm(self.q_proj(hidden_states).view(bsnd_shape)).view(bsh_shape)
-        key_states = self.q_norm(self.k_proj(hidden_states).view(bsnd_shape)).view(bsh_shape)
+        kv_bsnd_shape = (bs, seq_len, self.num_key_value_heads, self.head_dim)
+        kv_bsh_shape = (bs, seq_len, self.num_key_value_heads * self.head_dim)
+
+        query_states = self.q_norm(self.q_proj(hidden_states).view(q_bsnd_shape)).view(q_bsh_shape)
+        key_states = self.k_norm(self.k_proj(hidden_states).view(kv_bsnd_shape)).view(kv_bsh_shape)
         value_states = self.v_proj(hidden_states)
 
         attn_output = self.infer_attention(
@@ -887,7 +891,7 @@ class Qwen3ForCausalLM(Qwen3PreTrainedModel, GenerationMixin):
             compute_dtype = str_to_dtype(config.mindspore_dtype)
 
             self.freqs_mgr = FreqsMgr(
-                head_dim=config.hidden_size // config.num_attention_heads,
+                head_dim=getattr(config, "head_dim", config.hidden_size // config.num_attention_heads),
                 seq_length=config.max_position_embeddings,
                 max_position_embedding=config.max_position_embeddings,
                 rotary_dtype=compute_dtype,
