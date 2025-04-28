@@ -1,61 +1,64 @@
-import time
-
-from transformers import AutoTokenizer
-
+import argparse
 import mindspore as ms
 from mindspore import JitConfig
-
-from mindway.transformers import Qwen3ForCausalLM
-
-ms.set_context(mode=0, jit_syntax_level=ms.STRICT)
-
-start_time = time.time()
-
-model_name = "QwQ/Qwen3-0.6B-250424"
-model = Qwen3ForCausalLM.from_pretrained(
-    model_name,
-    mindspore_dtype=ms.bfloat16,
-    attn_implementation="paged_attention",
-)
-
-# infer boost
-jitconfig = JitConfig(jit_level="O0", infer_boost="on")
-model.set_jit_config(jitconfig)
-
-config = model.config
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-print("*" * 100)
-print(f"Using {config._attn_implementation}, use_cache {config.use_cache},"
-      f" dtype {config.mindspore_dtype}, layer {config.num_hidden_layers}")
-print("Test passed: Sucessfully loaded Qwen3ForCausalLM")
-print("Time elapsed: %.4fs" % (time.time() - start_time))
-print("*" * 100)
-
-prompt = "Give me a short introduction to large language model."
-messages = [
-    {"role": "system", "content": "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."},
-    {"role": "user", "content": prompt},
-]
-text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
-input_ids = ms.Tensor(tokenizer([text], return_tensors="np").input_ids, ms.int32)
-model_inputs = {}
-model_inputs["input_ids"] = input_ids
-
-generated_ids = model.generate(
-    **model_inputs,
-    max_new_tokens=50,
-    do_sample=False,
-    use_cache=False,
-)
-
-generated_ids = [output_ids[len(input_ids) :] for input_ids, output_ids in zip(input_ids, generated_ids)]
-
-outputs = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-
-print(outputs)
+from transformers import AutoTokenizer
+from mindway.transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 
 
+def generate(args):
+
+    # load model
+    model = Qwen3ForCausalLM.from_pretrained(
+        args.model_name,
+        mindspore_dtype=ms.bfloat16,
+        attn_implementation=args.attn_implementation,
+    )
+
+    jitconfig = JitConfig(jit_level="O0", infer_boost="on")
+    model.set_jit_config(jitconfig)
+    config = model.config
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+
+    # info
+    print("*" * 100)
+    print(f"Using {config._attn_implementation}, use_cache {config.use_cache},"
+        f"dtype {config.mindspore_dtype}, layer {config.num_hidden_layers}")
+    print("Successfully loaded Qwen3ForCausalLM")
 
 
+    # prepare inputs
+    prompt = "Give me a short introduction to large language model."
+    messages = [
+        {"role": "system", "content": "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."},
+        {"role": "user", "content": prompt},
+    ]
+    text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    input_ids = ms.Tensor(tokenizer([text], return_tensors="np").input_ids, ms.int32)
+    model_inputs = {}
+    model_inputs["input_ids"] = input_ids
+
+    # generate
+    generated_ids = model.generate(
+        **model_inputs,
+        max_new_tokens=50,
+        do_sample=False,
+        use_cache=False,
+    )
+
+    generated_ids = [output_ids[len(input_ids) :] for input_ids, output_ids in zip(input_ids, generated_ids)]
+    outputs = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+    print(outputs)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="qwen3 demo.")
+
+    parser.add_argument("--prompt", type=str, required=True)
+    parser.add_argument("--model_path", type=str, default="Qwen/Qwen3-0.6B", help="Path to the pre-trained model.")
+    parser.add_argument("--attn_implementation", type=str, default="paged_attention", choices=["paged_attention", "flash_attentions_2", "eager"])
+
+    # Parse the arguments
+    args = parser.parse_args()
+
+    ms.set_context(mode=ms.GRAPH_MODE, jit_syntax_level=ms.STRICT)
+    generate(args)
