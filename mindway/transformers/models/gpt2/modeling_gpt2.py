@@ -30,7 +30,7 @@ from transformers.utils import (
 )
 
 import mindspore as ms
-from mindspore import mint, nn, ops
+from mindspore import Tensor, mint, nn, ops
 from mindspore.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
 from ...activations import ACT2FN
@@ -1060,6 +1060,14 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
         if inputs_embeds is not None and cache_position[0] == 0:
             model_inputs = {"inputs_embeds": inputs_embeds}
         else:
+            if not isinstance(input_ids, Tensor):
+                input_ids = Tensor(input_ids, dtype=ms.int32)
+
+            # Padding to max_len when no cache
+            if past_key_values is None:
+                pad_len = max(0, attention_mask.shape[1] - input_ids.shape[1])
+                input_ids = ops.pad(input_ids, (0, pad_len), value=0)
+
             model_inputs = {"input_ids": input_ids}
 
         if isinstance(past_key_values, StaticCache) and attention_mask.ndim == 2:

@@ -5,6 +5,16 @@ from .image_processing_base import ImageProcessingMixin
 from .image_processing_utils import BaseImageProcessor
 from .image_utils import ImageFeatureExtractionMixin
 from .modeling_utils import MSPreTrainedModel
+from .models.albert import (
+    AlbertForMaskedLM,
+    AlbertForMultipleChoice,
+    AlbertForPreTraining,
+    AlbertForQuestionAnswering,
+    AlbertForSequenceClassification,
+    AlbertForTokenClassification,
+    AlbertModel,
+    AlbertPreTrainedModel,
+)
 from .models.auto import AutoImageProcessor, AutoModel, AutoModelForCausalLM, AutoModelForMaskedLM
 from .models.bert import (
     BertForMaskedLM,
@@ -61,6 +71,13 @@ from .models.glm import (
     GlmModel,
     GlmPreTrainedModel,
 )
+from .models.glpn import (
+    GLPNFeatureExtractor,
+    GLPNForDepthEstimation,
+    GLPNImageProcessor,
+    GLPNPreTrainedModel,
+    GLPNModel
+)
 from .models.gpt2 import (
     GPT2DoubleHeadsModel,
     GPT2ForQuestionAnswering,
@@ -70,6 +87,13 @@ from .models.gpt2 import (
     GPT2Model,
     GPT2PreTrainedModel,
 )
+from .models.hiera import (
+    HieraForPreTraining,
+    HieraModel,
+    HieraPreTrainedModel,
+    HieraBackbone,
+    HieraForImageClassification
+)
 from .models.imagegpt import (
     ImageGPTForCausalImageModeling,
     ImageGPTForImageClassification,
@@ -77,6 +101,13 @@ from .models.imagegpt import (
     ImageGPTPreTrainedModel,
     ImageGPTFeatureExtractor,
     ImageGPTImageProcessor
+)
+from .models.levit import (
+    LevitModel,
+    LevitForImageClassificationWithTeacher,
+    LevitForImageClassification,
+    LevitPreTrainedModel,
+    LevitFeatureExtractor
 )
 from .models.llama import LlamaForCausalLM, LlamaForSequenceClassification, LlamaModel, LlamaPreTrainedModel
 from .models.llava import LlavaConfig, LlavaForConditionalGeneration
@@ -97,6 +128,7 @@ from .models.phi3 import (
 from .models.qwen2 import Qwen2ForCausalLM, Qwen2ForSequenceClassification, Qwen2ForTokenClassification, Qwen2Model
 from .models.qwen2_5_vl import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel
 from .models.qwen2_vl import Qwen2VLForConditionalGeneration, Qwen2VLModel, Qwen2VLPreTrainedModel
+from .models.qwen3 import Qwen3ForCausalLM, Qwen3Model, Qwen3PreTrainedModel
 from .models.siglip import SiglipModel, SiglipPreTrainedModel, SiglipTextModel, SiglipVisionModel
 from .models.speecht5 import (
     SpeechT5ForSpeechToSpeech,
@@ -122,4 +154,5 @@ from .models.umt5 import (
     UMT5PreTrainedModel,
 )
 from .models.xlm_roberta import XLMRobertaModel, XLMRobertaPreTrainedModel
+from .pipelines import TextGenerationPipeline, pipeline
 from .processing_utils import ProcessorMixin
