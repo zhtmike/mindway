@@ -5,17 +5,17 @@ from .image_processing_base import ImageProcessingMixin
 from .image_processing_utils import BaseImageProcessor
 from .image_utils import ImageFeatureExtractionMixin
 from .modeling_utils import MSPreTrainedModel
-from .models.auto import AutoImageProcessor, AutoModel, AutoModelForCausalLM, AutoModelForMaskedLM
 from .models.albert import (
-    AlbertPreTrainedModel,
-    AlbertModel,
-    AlbertForPreTraining,
     AlbertForMaskedLM,
+    AlbertForMultipleChoice,
+    AlbertForPreTraining,
+    AlbertForQuestionAnswering,
     AlbertForSequenceClassification,
     AlbertForTokenClassification,
-    AlbertForQuestionAnswering,
-    AlbertForMultipleChoice,
+    AlbertModel,
+    AlbertPreTrainedModel,
 )
+from .models.auto import AutoImageProcessor, AutoModel, AutoModelForCausalLM, AutoModelForMaskedLM
 from .models.bert import (
     BertForMaskedLM,
     BertForMultipleChoice,
@@ -139,4 +139,5 @@ from .models.umt5 import (
     UMT5PreTrainedModel,
 )
 from .models.xlm_roberta import XLMRobertaModel, XLMRobertaPreTrainedModel
+from .pipelines import TextGenerationPipeline, pipeline
 from .processing_utils import ProcessorMixin
