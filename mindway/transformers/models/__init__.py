@@ -12,6 +12,7 @@ from . import (
     glpn,
     gpt2,
     hiera,
+    imagegpt,
     levit,
     llama,
     llava,

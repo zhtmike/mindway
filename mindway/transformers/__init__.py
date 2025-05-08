@@ -94,6 +94,14 @@ from .models.hiera import (
     HieraBackbone,
     HieraForImageClassification
 )
+from .models.imagegpt import (
+    ImageGPTForCausalImageModeling,
+    ImageGPTForImageClassification,
+    ImageGPTModel,
+    ImageGPTPreTrainedModel,
+    ImageGPTFeatureExtractor,
+    ImageGPTImageProcessor
+)
 from .models.levit import (
     LevitModel,
     LevitForImageClassificationWithTeacher,
