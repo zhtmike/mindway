@@ -94,6 +94,11 @@ from .models.hiera import (
     HieraBackbone,
     HieraForImageClassification
 )
+from .models.ijepa import (
+    IJepaForImageClassification,
+    IJepaModel,
+    IJepaPreTrainedModel,
+)
 from .models.imagegpt import (
     ImageGPTForCausalImageModeling,
     ImageGPTForImageClassification,
