@@ -11,6 +11,7 @@ from . import (
     glm,
     glpn,
     gpt2,
+    hiera,
     levit,
     llama,
     llava,

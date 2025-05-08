@@ -87,6 +87,13 @@ from .models.gpt2 import (
     GPT2Model,
     GPT2PreTrainedModel,
 )
+from .models.hiera import (
+    HieraForPreTraining,
+    HieraModel,
+    HieraPreTrainedModel,
+    HieraBackbone,
+    HieraForImageClassification
+)
 from .models.levit import (
     LevitModel,
     LevitForImageClassificationWithTeacher,
