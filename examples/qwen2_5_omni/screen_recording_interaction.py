@@ -8,7 +8,7 @@ import mindspore as ms
 
 from mindway.transformers import Qwen2_5OmniForConditionalGeneration
 from mindway.transformers.models.qwen2_5_omni import Qwen2_5OmniProcessor
-from mindway.transformers.models.qwen2_5_omni.qwen_omni_utils import process_mm_info
+from .qwen_omni_utils import process_mm_info
 
 
 # inference function

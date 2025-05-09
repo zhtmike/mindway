@@ -46,7 +46,7 @@ from ...modeling_outputs import BaseModelOutput, BaseModelOutputWithPast, Causal
 from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS
 from ...modeling_utils import MSPreTrainedModel  # ALL_ATTENTION_FUNCTIONS
 from ...utils import is_flash_attn_2_available
-from ._conv import Conv1d, ConvTranspose1d, conv1d, conv_transpose1d
+from ...mindspore_adapter._conv import Conv1d, ConvTranspose1d, conv1d, conv_transpose1d
 from .configuration_qwen2_5_omni import (
     Qwen2_5OmniAudioEncoderConfig,
     Qwen2_5OmniBigVGANConfig,
