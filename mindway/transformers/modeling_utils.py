@@ -811,6 +811,53 @@ class PreTrainedModel(nn.Cell, ModuleUtilsMixin, GenerationMixin, PushToHubMixin
             config._attn_implementation = "sdpa"
         return config
 
+    @classmethod
+    def _from_config(cls, config, **kwargs):
+        """
+        All context managers that the model should be initialized under go here.
+
+        Args:
+            torch_dtype (str, *optional*):
+                Override the default torch_dtype and load the model under this dtype.
+        """
+        # when we init a model from within another model (e.g. VLMs) and dispatch on FA2
+        # a warning is raised that dtype should be fp16. Since we never pass dtype from within
+        # modeling code, we can try to infer it here same way as done in `from_pretrained`
+        mindspore_dtype = kwargs.pop("torch_dtype", config.torch_dtype)
+        if isinstance(mindspore_dtype, str):
+            mindspore_dtype = getattr(ms, mindspore_dtype)
+
+        use_flash_attention_2 = kwargs.pop("use_flash_attention_2", False)
+
+        config = copy.deepcopy(config)  # We do not want to modify the config inplace in _from_config.
+
+        if config._attn_implementation_internal is not None:
+            # In this case, the config has been created with the attn_implementation set by the user, which we
+            # should respect.
+            attn_implementation = config._attn_implementation_internal
+        else:
+            attn_implementation = None
+
+        config._attn_implementation = kwargs.pop("attn_implementation", attn_implementation)
+        if not getattr(config, "_attn_implementation_autoset", False):
+            config = cls._autoset_attn_implementation(
+                config,
+                use_flash_attention_2=use_flash_attention_2,
+                mindspore_dtype=mindspore_dtype,
+            )
+
+        model = cls(config, **kwargs)
+
+        # We cannot set default mindspore dtype. So we need to cast model weights after creating.
+        if mindspore_dtype is not None:
+            model = model.to(mindspore_dtype)
+
+            logger.info(
+                f"convert model:{model.__class__.__name__} parameters to mindspore_dtype {dtype_to_str(mindspore_dtype)}"
+            )
+
+        return model
+
     def get_input_embeddings(self) -> nn.Cell:
         """
         Returns the model's input embeddings.
