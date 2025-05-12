@@ -56,6 +56,7 @@ import mindspore.ops as ops
 from mindspore.common.initializer import HeUniform, Normal, initializer
 
 from mindway.models.utils import normal_, zeros_
+from mindway.transformers.activations import ClassInstantier
 from mindway.transformers.cache_utils import Cache, DynamicCache
 from mindway.transformers.generation.utils import GenerationMixin
 from mindway.transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
@@ -69,7 +70,9 @@ from .configuration_kimi_vl import DeepseekV3Config, KimiVLConfig, MoonViTConfig
 
 logger = logging.get_logger(__name__)
 
-ACT2FN = dict()
+
+ACT2CLS = {"silu": mint.nn.SiLU}
+ACT2FN = ClassInstantier(ACT2CLS)
 
 
 class GELUActivation(nn.Cell):
@@ -200,7 +203,7 @@ class Learnable2DInterpPosEmb(nn.Cell):
         self.height = height
         self.width = width
         self.interpolation_mode = interpolation_mode
-        self.weight = ms.Parameter(initializer(Normal(sigma=1.0), shape=(height, width, dim), dtype=np.float32))
+        self.weight = ms.Parameter(initializer(Normal(sigma=1.0), shape=(height, width, dim), dtype=ms.float32))
 
     def construct(self, x: ms.Tensor, grid_hws: ms.Tensor) -> ms.Tensor:
         pos_embs = []
@@ -521,15 +524,15 @@ class DeepseekV3RotaryEmbedding(nn.Cell):
         self.max_position_embeddings = max_position_embeddings
         self.base = base
         inv_freq = 1.0 / (self.base ** (np.arange(0, self.dim, 2, dtype=np.float32) / self.dim))
-        self.inv_freq = ms.Parameter(ms.Tensor(inv_freq, dtype=ms.float32), requires_grad=False)
-        self.max_seq_len_cached = ms.Parameter(max_position_embeddings, requires_grad=False)
-        self.cos_cached = ms.Parameter(np.zeros((max_position_embeddings, dim), dtype=np.float32), requires_grad=False)
-        self.sin_cached = ms.Parameter(np.zeros((max_position_embeddings, dim), dtype=np.float32), requires_grad=False)
+        self.inv_freq = ms.Tensor(inv_freq, dtype=ms.float32)
+        self.max_seq_len_cached = ms.Tensor(max_position_embeddings)
+        self.cos_cached = ms.Tensor(np.zeros((max_position_embeddings, dim), dtype=np.float32))
+        self.sin_cached = ms.Tensor(np.zeros((max_position_embeddings, dim), dtype=np.float32))
         self._set_cos_sin_cache(max_position_embeddings)
 
     def _set_cos_sin_cache(self, seq_len: int) -> None:
         ops.assign(self.max_seq_len_cached, seq_len)
-        t = mint.arange(self.max_seq_len_cached, dtype=ms.float32)
+        t = mint.arange(self.max_seq_len_cached.item(), dtype=ms.float32)
 
         freqs = mint.outer(t, self.inv_freq)
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
@@ -1642,7 +1645,7 @@ class MoonVitVLProjector(nn.Cell):
     def __init__(
         self,
         in_channels: int,
-        merge_kernel_size: List[int, int],
+        merge_kernel_size: Tuple[int, int],
         hidden_act: str = "gelu",
         ln_eps: float = 1e-5,
         out_dim: int = 4096,
@@ -1741,6 +1744,7 @@ class KimiVLPreTrainedModel(PreTrainedModel, GenerationMixin):
     _no_split_modules = ["MoonVitEncoderLayer", "DeepseekV3DecoderLayer"]
     _skip_keys_device_placement = "past_key_values"
     _supports_flash_attn_2 = True
+    _supports_cache_class = True
 
     def _init_weights(self, module):
         # important: this ported version of Llava isn't meant for training from scratch - only

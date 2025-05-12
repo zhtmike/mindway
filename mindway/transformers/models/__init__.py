@@ -15,6 +15,7 @@ from . import (
     hiera,
     ijepa,
     imagegpt,
+    kimi_vl,
     levit,
     llama,
     llava,
