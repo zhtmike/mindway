@@ -12,6 +12,7 @@ from transformers.tokenization_utils import ExtensionsTrie
 from transformers.utils.generic import ModelOutput
 
 import mindspore as ms
+import mindspore.mint.nn.functional as F
 import mindspore.numpy as mnp
 from mindspore import mint, ops
 
@@ -44,7 +45,6 @@ from mindway.transformers.generation.stopping_criteria import (
     StoppingCriteriaList,
 )
 from mindway.transformers.mindspore_adapter.paged_attention_block_tables import BlockTables
-from mindway.transformers.mindspore_adapter.select_operator import get_multinomial_op
 from mindway.transformers.modeling_outputs import CausalLMOutputWithPast
 
 if TYPE_CHECKING:
@@ -58,6 +58,15 @@ logger = logging.get_logger(__name__)
 
 NEED_SETUP_CACHE_CLASSES_MAPPING = {}
 QUANT_BACKEND_CLASSES_MAPPING = {}
+
+# Variable names used to hold the cache at generation time
+ALL_CACHE_NAMES = [
+    "past_key_values",  # default
+    "cache_params",  # mamba-based models
+    "state",  # rwkv
+    "mems",  # xlnet
+    "past_buckets_states",  # reformer
+]
 
 
 @dataclass
@@ -660,36 +669,25 @@ class GenerationMixin:
 
     def _get_initial_cache_position(self, input_ids, model_kwargs):
         """Calculates `cache_position` for the pre-fill stage based on `input_ids` and optionally past length"""
-        if not model_kwargs.get("use_cache", True):
-            model_kwargs["cache_position"] = None
-            return model_kwargs
+        if "inputs_embeds" in model_kwargs and not self.config.is_encoder_decoder:
+            cache_position = mint.ones_like(model_kwargs["inputs_embeds"][0, :, 0], dtype=ms.int32).cumsum(0) - 1
+        elif "decoder_inputs_embeds" in model_kwargs and self.config.is_encoder_decoder:
+            cache_position = (
+                mint.ones_like(model_kwargs["decoder_inputs_embeds"][0, :, 0], dtype=ms.int64).cumsum(0) - 1
+            )
+        else:
+            cache_position = mint.ones_like(input_ids[0, :], dtype=ms.int32).cumsum(0) - 1
 
         past_length = 0
         if model_kwargs.get("past_key_values") is not None:
             cache = model_kwargs["past_key_values"]
-            if isinstance(cache, Tuple):
-                past_length = get_seq_length(cache)
+            past_length = 0
+            if not isinstance(cache, Cache):
+                past_length = cache[0][0].shape[2]
             elif hasattr(cache, "get_seq_length") and cache.get_seq_length() is not None:
                 past_length = cache.get_seq_length()
 
-        if isinstance(cache, Tuple) and (model_kwargs.get("attention_mask", None) is not None):
-            attention_mask = model_kwargs["attention_mask"]
-            if "inputs_embeds" in model_kwargs:
-                max_len = model_kwargs["inputs_embeds"].shape[1]
-            else:
-                max_len = input_ids.shape[-1]
-            cur_len = int(attention_mask.sum(-1).max())
-
-            cache_position = ops.arange(past_length, cur_len, dtype=ms.int32)
-            if (cur_len - past_length) < max_len:
-                cache_position = ops.cat([cache_position, ops.zeros(max_len - (cur_len - past_length), ms.int32)])
-        else:
-            if "inputs_embeds" in model_kwargs:
-                cur_len = model_kwargs["inputs_embeds"].shape[1]
-            else:
-                cur_len = input_ids.shape[-1]
-
-            cache_position = ops.arange(past_length, cur_len, dtype=ms.int32)
+            cache_position = cache_position[past_length:]
 
         model_kwargs["cache_position"] = cache_position
         return model_kwargs
@@ -1084,73 +1082,48 @@ class GenerationMixin:
         outputs: ModelOutput,
         model_kwargs: Dict[str, Any],
         is_encoder_decoder: bool = False,
-        standardize_cache_format: bool = False,
         num_new_tokens: int = 1,
     ) -> Dict[str, Any]:
         # update past_key_values keeping its naming used in model code
-        cache_name, cache = self._extract_past_from_model_output(
-            outputs, standardize_cache_format=standardize_cache_format
-        )
-        model_kwargs[cache_name] = cache
-        if getattr(outputs, "state", None) is not None:
-            model_kwargs["state"] = outputs.state
+        for possible_cache_name in ALL_CACHE_NAMES:
+            if possible_cache_name in outputs:
+                # TODO (joao): remove output/input mismatch when these old models (xlnet, reformer) are deprecated
+                if possible_cache_name in ("past_buckets_states", "mems"):
+                    cache_name = "past_key_values"
+                else:
+                    cache_name = possible_cache_name
+                model_kwargs[cache_name] = getattr(outputs, possible_cache_name)
+                break
 
         # update token_type_ids with last value
         if "token_type_ids" in model_kwargs:
             token_type_ids = model_kwargs["token_type_ids"]
-            model_kwargs["token_type_ids"] = ops.cat([token_type_ids, token_type_ids[:, -1].unsqueeze(-1)], axis=-1)
+            model_kwargs["token_type_ids"] = mint.cat([token_type_ids, token_type_ids[:, -1].unsqueeze(-1)], dim=-1)
 
         if not is_encoder_decoder:
             # update attention mask
             if "attention_mask" in model_kwargs:
                 attention_mask = model_kwargs["attention_mask"]
-
-                if (
-                    not self._supports_default_dynamic_cache() and self.config._attn_implementation != "paged_attention"
-                ):  # use tuple cache
-                    cur_lens = attention_mask.sum(-1)
-                    for batch_idx in range(attention_mask.shape[0]):
-                        cur_len = int(cur_lens[batch_idx])
-                        if cur_len < attention_mask.shape[-1]:
-                            attention_mask[batch_idx, cur_len] = 1
-                        else:
-                            attention_mask[batch_idx, :-1] = attention_mask[batch_idx, 1:]
-                            attention_mask[batch_idx, -1:] = 1
-                    model_kwargs["attention_mask"] = attention_mask
-                else:  # use Cache class
-                    model_kwargs["attention_mask"] = ops.cat(
-                        [attention_mask, ops.ones((attention_mask.shape[0], 1), dtype=attention_mask.dtype)], axis=-1
-                    )
+                model_kwargs["attention_mask"] = mint.cat(
+                    [attention_mask, attention_mask.new_ones((attention_mask.shape[0], 1))], dim=-1
+                )
         else:
             # update decoder attention mask
             if "decoder_attention_mask" in model_kwargs:
                 decoder_attention_mask = model_kwargs["decoder_attention_mask"]
-                model_kwargs["decoder_attention_mask"] = ops.cat(
-                    [
-                        decoder_attention_mask,
-                        ops.ones((decoder_attention_mask.shape[0], 1), dtype=decoder_attention_mask.dtype),
-                    ],
-                    axis=-1,
+                model_kwargs["decoder_attention_mask"] = mint.cat(
+                    [decoder_attention_mask, decoder_attention_mask.new_ones((decoder_attention_mask.shape[0], 1))],
+                    dim=-1,
                 )
 
-        if (
-            model_kwargs.get("use_cache", True)
-            and "cache_position" in model_kwargs
-            and model_kwargs["cache_position"] is not None
-        ):
-            if (
-                model_kwargs.get("attention_mask", None) is not None
-                and model_kwargs["attention_mask"].shape[-1] == model_kwargs["cache_position"].shape[0]
-            ):
-                # `cache_position` obtain effective length after 1st step
-                cur_idx = int(model_kwargs["attention_mask"].sum(-1).max()) - 1
-                past_idx = cur_idx - 1
-                model_kwargs["cache_position"] = (
-                    model_kwargs["cache_position"][past_idx : past_idx + 1] + num_new_tokens
-                )
-            else:
-                model_kwargs["cache_position"] = model_kwargs["cache_position"][-1:] + num_new_tokens
-
+        if model_kwargs.get("use_cache", True):
+            model_kwargs["cache_position"] = model_kwargs["cache_position"][-1:] + num_new_tokens
+        else:
+            past_positions = model_kwargs.pop("cache_position")
+            new_positions = mint.arange(
+                past_positions[-1] + 1, past_positions[-1] + num_new_tokens + 1, dtype=past_positions.dtype
+            )
+            model_kwargs["cache_position"] = mint.cat((past_positions, new_positions))
         return model_kwargs
 
     def _get_logits_processor(
@@ -1234,11 +1207,7 @@ class GenerationMixin:
         if generation_config.exponential_decay_length_penalty is not None:
             raise NotImplementedError
         if generation_config.suppress_tokens is not None:
-            processors.append(
-                SuppressTokensLogitsProcessor(
-                    generation_config.suppress_tokens
-                )
-            )
+            processors.append(SuppressTokensLogitsProcessor(generation_config.suppress_tokens))
         if generation_config.begin_suppress_tokens is not None:
             raise NotImplementedError
         if generation_config.forced_decoder_ids is not None:
@@ -1722,29 +1691,7 @@ class GenerationMixin:
             and not self._supports_default_dynamic_cache()
             and model_kwargs.get("use_cache", False)
         ):
-            past = model_kwargs.get(cache_name, None)
-            max_batch_size, max_cache_len, cache_dtype = (
-                getattr(generation_config, "num_beams", 1) * batch_size,
-                generation_config.max_length,
-                self.dtype,
-            )
-            need_new_cache = (
-                past is None
-                or (not isinstance(past, tuple))
-                or (not isinstance(past[0][0], ms.Tensor))
-                or past[0][0].shape[0] != max_batch_size
-                or past[0][0].shape[2] < max_cache_len
-            )
-
-            if need_new_cache:
-                model_kwargs[cache_name] = init_static_cache(
-                    config=self.config,
-                    max_batch_size=max_batch_size,
-                    max_cache_len=max_cache_len,
-                    dtype=cache_dtype,
-                )
-            else:
-                model_kwargs[cache_name] = reset(past)
+            pass
 
         self._validate_generated_length(generation_config, input_ids_length, has_default_max_length)
 
@@ -1844,7 +1791,6 @@ class GenerationMixin:
         generation_config: GenerationConfig,
         synced_gpus: bool,
         streamer: Optional["BaseStreamer"],
-        logits_warper: Optional[LogitsProcessorList] = None,
         **model_kwargs,
     ) -> Union[GenerateNonBeamOutput, ms.Tensor]:
         r"""
@@ -1893,11 +1839,6 @@ class GenerationMixin:
         return_dict_in_generate = generation_config.return_dict_in_generate
         has_eos_stopping_criteria = any(hasattr(criteria, "eos_token_id") for criteria in stopping_criteria)
         do_sample = generation_config.do_sample
-        if do_sample is True and not isinstance(logits_warper, LogitsProcessorList):
-            raise ValueError(
-                "`do_sample` is set to `True`, `logits_warper` must be a `LogitsProcessorList` instance (it is "
-                f"{logits_warper})."
-            )
 
         # init attention / hidden states / scores tuples
         scores = () if (return_dict_in_generate and output_scores) else None
@@ -1913,38 +1854,12 @@ class GenerationMixin:
                 model_kwargs["encoder_outputs"].get("hidden_states") if output_hidden_states else None
             )
 
-        # Padding inputs to avoid dynamic shape/ adapt to paged_attention
-        if not self._supports_default_dynamic_cache() and self.config._attn_implementation != "paged_attention":  # if tuple cache
-            (
-                padded_input_ids,
-                padded_inputs_embeds,
-                padded_labels,
-                padded_position_ids,
-                padded_attention_mask,
-            ) = self._padding_inputs(
-                generation_config,
-                input_ids,
-                model_kwargs.get("inputs_embeds", None),
-                model_kwargs.get("labels", None),
-                model_kwargs.get("position_ids", None),
-                model_kwargs.get("attention_mask", None),
-            )
-            input_ids = padded_input_ids
-            model_kwargs["attention_mask"] = padded_attention_mask
-            if model_kwargs.get("inputs_embeds", None) is not None:
-                model_kwargs["inputs_embeds"] = padded_inputs_embeds
-            if model_kwargs.get("labels", None) is not None:
-                model_kwargs["labels"] = padded_labels
-            if model_kwargs.get("position_ids", None) is not None:
-                model_kwargs["position_ids"] = padded_position_ids
-
         # keep track of which sequences are already finished
         batch_size = input_ids.shape[0]
         this_peer_finished = False
-        unfinished_sequences = ops.ones(batch_size, dtype=ms.int32)
+        unfinished_sequences = mint.ones(batch_size, dtype=ms.int32)
         model_kwargs = self._get_initial_cache_position(input_ids, model_kwargs)
 
-        multinomial = get_multinomial_op()
         step = 0
         s_time = time.time()
         graph_compiled_time_buffer = []
@@ -1955,16 +1870,12 @@ class GenerationMixin:
                 model_kwargs["step"] = step
             model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
 
-            # forward pass to get next token
-            outputs = self(
-                **model_inputs,
-                return_dict=False if ms.get_context("mode") == ms.GRAPH_MODE else True,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-            )
+            # prepare variable output controls (note: some models won't accept all output controls)
+            model_inputs.update({"output_attentions": output_attentions} if output_attentions else {})
+            model_inputs.update({"output_hidden_states": output_hidden_states} if output_hidden_states else {})
 
-            if synced_gpus and this_peer_finished:
-                continue  # don't waste resources running the code we don't need
+            # forward pass to get next token
+            outputs = self(**model_inputs, return_dict=False if ms.get_context("mode") == ms.GRAPH_MODE else True)
 
             step_time = time.time() - s_time
             if step < 2:
@@ -1978,6 +1889,15 @@ class GenerationMixin:
             s_time = time.time()
             step += 1
 
+            # synced_gpus: don't waste resources running the code we don't need; kwargs must be updated before skipping
+            model_kwargs = self._update_model_kwargs_for_generation(
+                outputs,
+                model_kwargs,
+                is_encoder_decoder=self.config.is_encoder_decoder,
+            )
+            if synced_gpus and this_peer_finished:
+                continue  # don't waste resources running the code we don't need
+
             if not isinstance(outputs, CausalLMOutputWithPast):
                 outputs = CausalLMOutputWithPast(
                     loss=None,
@@ -1985,27 +1905,10 @@ class GenerationMixin:
                     past_key_values=outputs[1] if model_inputs.get("use_cache", False) else None,
                 )
 
-            # Tuple static cache
-            if (not self._supports_default_dynamic_cache()) and (model_kwargs.get("attention_mask", None) is not None):
-                attention_mask = model_kwargs["attention_mask"]
-                cur_idx = int(attention_mask.sum(-1).max()) - 1
-
-                if outputs.logits.shape[1] == attention_mask.shape[-1]:
-                    next_token_logits = outputs.logits[:, cur_idx, :]  # (bs, seq, dim)
-                else:
-                    next_token_logits = outputs.logits[:, -1, :]
-
-                # `input_ids` obtain effective length after 1st step
-                if input_ids.shape[1] == attention_mask.shape[1]:
-                    input_ids = input_ids[:, : cur_idx + 1]
-
-            else:
-                next_token_logits = outputs.logits[:, -1, :]
+            next_token_logits = outputs.logits[:, -1, :].to(ms.float32)
 
             # pre-process distribution
             next_token_scores = logits_processor(input_ids, next_token_logits)
-            if do_sample:
-                next_token_scores = logits_warper(input_ids, next_token_scores)
 
             # Store scores, attentions and hidden_states when required
             if return_dict_in_generate:
@@ -2027,10 +1930,11 @@ class GenerationMixin:
 
             # token selection
             if do_sample:
-                probs = ops.softmax(next_token_scores, axis=-1, dtype=ms.float32).to(next_token_scores.dtype)
-                next_tokens = multinomial(probs, num_samples=1).squeeze(1)
+                probs = F.softmax(next_token_scores, dim=-1)
+                # TODO (joao): this OP throws "skipping cudagraphs due to ['incompatible ops']", find solution
+                next_tokens = mint.multinomial(probs, num_samples=1).squeeze(1)
             else:
-                next_tokens = ops.argmax(next_token_scores, dim=-1)
+                next_tokens = mint.argmax(next_token_scores, dim=-1)
 
             # finished sentences should have their next token be a padding token
             if has_eos_stopping_criteria:
@@ -2038,15 +1942,9 @@ class GenerationMixin:
             next_tokens = next_tokens.to(ms.int32)
 
             # update generated ids, model inputs, and length for next step
-            input_ids = ops.cat([input_ids, next_tokens[:, None]], axis=-1)
+            input_ids = mint.cat([input_ids, next_tokens[:, None]], dim=-1)
             if streamer is not None:
                 streamer.put(next_tokens.asnumpy())
-
-            model_kwargs = self._update_model_kwargs_for_generation(
-                outputs,
-                model_kwargs,
-                is_encoder_decoder=self.config.is_encoder_decoder,
-            )
 
             unfinished_sequences = unfinished_sequences & ~ms.Tensor(stopping_criteria(input_ids, scores), ms.bool_)
             this_peer_finished = unfinished_sequences.max() == 0
