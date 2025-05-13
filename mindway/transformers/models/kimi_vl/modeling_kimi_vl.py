@@ -91,7 +91,7 @@ class GELUActivation(nn.Cell):
 
 
 class PytorchGELUTanh(nn.Cell):
-    def forward(self, input: ms.Tensor) -> ms.Tensor:
+    def construct(self, input: ms.Tensor) -> ms.Tensor:
         return F.gelu(input, approximate="tanh")
 
 
@@ -174,6 +174,14 @@ def _apply_rope_input_validation(x: ms.Tensor, freqs_cis: ms.Tensor) -> None:
     assert freqs_cis.dtype == ms.complex64, freqs_cis.dtype
 
 
+def complex_mult(a: ms.Tensor, b: ms.Tensor) -> ms.Tensor:
+    a_real, a_complex = mint.unbind(a, dim=-1)
+    b_real, b_complex = mint.unbind(b, dim=-1)
+    out_real = a_real * b_real - a_complex * b_complex
+    out_complex = a_real * b_complex + b_real * a_complex
+    return mint.stack([out_real, out_complex], dim=-1)
+
+
 def apply_rope(xq: ms.Tensor, xk: ms.Tensor, freqs_cis: ms.Tensor) -> Tuple[ms.Tensor, ms.Tensor]:
     """
     Args: (The leading dimensions of all inputs should be the same)
@@ -187,13 +195,12 @@ def apply_rope(xq: ms.Tensor, xk: ms.Tensor, freqs_cis: ms.Tensor) -> Tuple[ms.T
     _apply_rope_input_validation(xk, freqs_cis)
 
     freqs_cis = freqs_cis.unsqueeze(-2)  # ..., 1, head_dim/2
+    freqs_cis = ops.view_as_real(freqs_cis)
     # ..., num_heads, head_dim/2
-    xq = xq.float().view(*xq.shape[:-1], -1, 2)
-    xk = xk.float().view(*xq.shape[:-1], -1, 2)
-    xq_ = ops.Complex()(xq[..., 0], xq[..., 1])
-    xk_ = ops.Complex()(xk[..., 0], xk[..., 1])
-    xq_out = ops.view_as_real(xq_ * freqs_cis).flatten(-2)  # ..., num_heads, head_dim
-    xk_out = ops.view_as_real(xk_ * freqs_cis).flatten(-2)  # ..., num_heads, head_dim
+    xq_ = xq.float().view(*xq.shape[:-1], -1, 2)
+    xk_ = xk.float().view(*xk.shape[:-1], -1, 2)
+    xq_out = complex_mult(xq_, freqs_cis).flatten(-2)  # ..., num_heads, head_dim
+    xk_out = complex_mult(xk_, freqs_cis).flatten(-2)  # ..., num_heads, head_dim
     return xq_out.type_as(xq), xk_out.type_as(xk)
 
 
@@ -343,7 +350,9 @@ class MLP2(nn.Cell):
         bias: whether to use bias in linear layer.
     """
 
-    def __init__(self, dims: list[int], activation, bias=True) -> None:
+    def __init__(
+        self, dims: list[int], activation: Union[nn.Cell, Callable[[ms.Tensor], ms.Tensor]], bias: bool = True
+    ) -> None:
         super().__init__()
         assert len(dims) == 3
         self.fc0 = mint.nn.Linear(dims[0], dims[1], bias=bias)
@@ -368,7 +377,7 @@ class MoonVitEncoderLayer(nn.Cell):
         mlp_dim: int,
         *,
         attn_implementation: str = "eager",
-        activation: Callable[[ms.Tensor], ms.Tensor] = F.gelu,
+        activation: Union[nn.Cell, Callable[[ms.Tensor], ms.Tensor]] = F.gelu,
         attn_bias: bool = False,
     ) -> None:
         super().__init__()
@@ -512,7 +521,7 @@ class DeepseekV3RMSNorm(nn.Cell):
 
     def construct(self, hidden_states: ms.Tensor) -> ms.Tensor:
         input_dtype = hidden_states.dtype
-        result, _ = ops.rms_norm(hidden_states.to(ms.float32), self.weight, self.variance_epsilon)
+        result, _ = ops.rms_norm(hidden_states.to(ms.float32), self.weight.to(ms.float32), self.variance_epsilon)
         return result.to(input_dtype)
 
 
@@ -919,13 +928,13 @@ class DeepseekV3MoE(nn.Cell):
         sorted_tokens_shape = sorted_tokens.shape
         if self.ep_size > 1:
             tokens_per_ep_rank = tokens_per_expert.view(self.ep_size, -1).sum(dim=1)
-            tokens_per_expert_group = tokens_per_expert.new_empty(tokens_per_expert.shape[0])
+            tokens_per_expert_group = tokens_per_expert.new_empty((tokens_per_expert.shape[0],))
             dist.all_to_all_single(tokens_per_expert_group, tokens_per_expert)
-            output_splits = tokens_per_expert_group.view(self.ep_size, -1).sum(1).cpu().numpy().tolist()
+            output_splits = tokens_per_expert_group.view(self.ep_size, -1).sum(1).numpy().tolist()
             gathered_tokens = sorted_tokens.new_empty(
-                tokens_per_expert_group.sum(dim=0).cpu().item(), sorted_tokens.shape[1]
+                (tokens_per_expert_group.sum(dim=0).item(), sorted_tokens.shape[1])
             )
-            input_split_sizes = tokens_per_ep_rank.cpu().numpy().tolist()
+            input_split_sizes = tokens_per_ep_rank.numpy().tolist()
             dist.all_to_all(
                 list(gathered_tokens.split(output_splits)),
                 list(sorted_tokens.split(input_split_sizes)),
@@ -933,13 +942,13 @@ class DeepseekV3MoE(nn.Cell):
             tokens_per_expert_post_gather = tokens_per_expert_group.view(self.ep_size, self.experts_per_rank).sum(dim=0)
             gatherd_idxs = np.zeros(shape=(gathered_tokens.shape[0],), dtype=np.int32)
             s = 0
-            for i, k in enumerate(tokens_per_expert_group.cpu().numpy()):
+            for i, k in enumerate(tokens_per_expert_group.numpy()):
                 gatherd_idxs[s : s + k] = i % self.experts_per_rank
                 s += k
             gatherd_idxs = gatherd_idxs.argsort()
             sorted_tokens = gathered_tokens[gatherd_idxs]
             tokens_per_expert = tokens_per_expert_post_gather
-        tokens_per_expert = tokens_per_expert.cpu().numpy()
+        tokens_per_expert = tokens_per_expert.numpy()
 
         outputs = []
         start_idx = 0
@@ -953,11 +962,11 @@ class DeepseekV3MoE(nn.Cell):
             outputs.append(expert_out)
             start_idx = end_idx
 
-        outs = mint.cat(outputs, dim=0) if len(outputs) else sorted_tokens.new_empty(0)
+        outs = mint.cat(outputs, dim=0) if len(outputs) else sorted_tokens.new_empty((0,))
         if self.ep_size > 1:
             new_x = mint.empty_like(outs)
             new_x[gatherd_idxs] = outs
-            gathered_tokens = new_x.new_empty(*sorted_tokens_shape)
+            gathered_tokens = new_x.new_empty(sorted_tokens_shape)
             dist.all_to_all(
                 list(gathered_tokens.split(input_split_sizes)),
                 list(new_x.split(output_splits)),
@@ -1146,11 +1155,11 @@ class DeepseekV3Attention(nn.Cell):
 
         q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids)
 
-        query_states = k_pe.new_empty(bsz, self.num_heads, q_len, self.q_head_dim)
+        query_states = k_pe.new_empty((bsz, self.num_heads, q_len, self.q_head_dim))
         query_states[:, :, :, : self.qk_nope_head_dim] = q_nope
         query_states[:, :, :, self.qk_nope_head_dim :] = q_pe
 
-        key_states = k_pe.new_empty(bsz, self.num_heads, q_len, self.q_head_dim)
+        key_states = k_pe.new_empty((bsz, self.num_heads, q_len, self.q_head_dim))
         key_states[:, :, :, : self.qk_nope_head_dim] = k_nope
         key_states[:, :, :, self.qk_nope_head_dim :] = k_pe
         if past_key_value is not None:
