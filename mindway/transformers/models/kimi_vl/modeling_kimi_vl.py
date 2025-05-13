@@ -806,7 +806,7 @@ class MoEGate(nn.Cell):
             group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
             score_mask = (
                 group_mask.unsqueeze(-1)
-                .expand(bsz * seq_len, self.n_group, self.n_routed_experts // self.n_group)
+                .expand((bsz * seq_len, self.n_group, self.n_routed_experts // self.n_group))
                 .reshape(bsz * seq_len, -1)
             )  # [n, e]
             tmp_scores = scores_for_choice.masked_fill(~score_mask.bool(), 0.0)  # [n, e]
@@ -930,11 +930,11 @@ class DeepseekV3MoE(nn.Cell):
             tokens_per_ep_rank = tokens_per_expert.view(self.ep_size, -1).sum(dim=1)
             tokens_per_expert_group = tokens_per_expert.new_empty((tokens_per_expert.shape[0],))
             dist.all_to_all_single(tokens_per_expert_group, tokens_per_expert)
-            output_splits = tokens_per_expert_group.view(self.ep_size, -1).sum(1).numpy().tolist()
+            output_splits = tokens_per_expert_group.view(self.ep_size, -1).sum(1).tolist()
             gathered_tokens = sorted_tokens.new_empty(
                 (tokens_per_expert_group.sum(dim=0).item(), sorted_tokens.shape[1])
             )
-            input_split_sizes = tokens_per_ep_rank.numpy().tolist()
+            input_split_sizes = tokens_per_ep_rank.tolist()
             dist.all_to_all(
                 list(gathered_tokens.split(output_splits)),
                 list(sorted_tokens.split(input_split_sizes)),
@@ -942,13 +942,13 @@ class DeepseekV3MoE(nn.Cell):
             tokens_per_expert_post_gather = tokens_per_expert_group.view(self.ep_size, self.experts_per_rank).sum(dim=0)
             gatherd_idxs = np.zeros(shape=(gathered_tokens.shape[0],), dtype=np.int32)
             s = 0
-            for i, k in enumerate(tokens_per_expert_group.numpy()):
+            for i, k in enumerate(tokens_per_expert_group.tolist()):
                 gatherd_idxs[s : s + k] = i % self.experts_per_rank
                 s += k
             gatherd_idxs = gatherd_idxs.argsort()
             sorted_tokens = gathered_tokens[gatherd_idxs]
             tokens_per_expert = tokens_per_expert_post_gather
-        tokens_per_expert = tokens_per_expert.numpy()
+        tokens_per_expert = tokens_per_expert.tolist()
 
         outputs = []
         start_idx = 0
